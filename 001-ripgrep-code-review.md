@@ -37,7 +37,7 @@ The work stealing mechanism:
 
 * A worker is described by this struct:
 
-      ```
+      ```rust
       struct MultiWorker {
           chan_work: Stealer<Work>,
           quiet_matched: QuietMatched,
@@ -60,13 +60,15 @@ Suggestions:
 
 * Remove `Quit` from the enum, and use instead `Option<Work>`; it feels much
   more ideomatic.
+
 * In `run` refactor out the last block of code into `run_multiple_threads`, so
   it's more consistent with the previous blocks.
+
 * Instead of cluttering the `MultiWorker` class with platform specific members,
   they could have used a wrapper module exporting the correct type, or provide
   a good `type` directive:
 
-      ```
+      ```rust
       #[cfg(not(windows))]
       type Terminal = Option<ColoredTerminal<term::TerminfoTerminal<Vec<u8>>>>;
       #[cfg(windows)]
