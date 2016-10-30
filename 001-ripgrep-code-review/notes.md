@@ -9,7 +9,12 @@ Big picture
 * The search process is split in two implementations, in the `search_buffer` and
   `search_stream` modules.
 * Command line parsing and options are handled in `args.rs`.
-* Output is handled by...
+* Output is handled by the `term` crate, `printer.rs`, `out.rs`, `terminal`,
+  `terminal_win` and `atty.rs`.
+* Ignore patterns are implemented in `gitignore.rs` which handles gitignores and
+  `ignore.rs` which represents a collections of ignores organized by a stack of
+  directories.
+* Directories are searched through `walk.rs`, with the `walkdir` crate.
 
 main.rs
 -------
@@ -155,6 +160,16 @@ What's interesting in there?
 
 search_buffer.rs
 ----------------
+
+
+printer.rs
+----------
+
+Duties:
+
+* handles the ouptut logic for the crate;
+* supports options and forwards writes to the inner `Terminal` type, which must
+  be `Send` also (I still don't understand why).
 
 
 Overall notes
