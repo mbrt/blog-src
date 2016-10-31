@@ -1,7 +1,7 @@
 Ripgrep code review
 ===================
 
-Reviewed version: 0.2.3-15-g0156967.
+Reviewed version: 0.2.5-4-gf728708
 
 Big picture
 -----------
@@ -11,10 +11,8 @@ Big picture
 * Command line parsing and options are handled in `args.rs`.
 * Output is handled by the `term` crate, `printer.rs`, `out.rs`, `terminal`,
   `terminal_win` and `atty.rs`.
-* Ignore patterns are implemented in `gitignore.rs` which handles gitignores and
-  `ignore.rs` which represents a collections of ignores organized by a stack of
-  directories.
-* Directories are searched through `walk.rs`, with the `walkdir` crate.
+* Directory walking, ignore and include patterns are implemented in the `ignore`
+  crate, with the help of the `walkdir` crate.
 
 main.rs
 -------
@@ -157,10 +155,64 @@ Duties:
 
 What's interesting in there?
 
+* the `InputBuffer` struct is a buffer used to search into. It buffers data read
+  from an input and has the option to keep part of the data across multiple
+  calls:
+
+      ```
+               keep   end
+                 |     |
+                 v     v
+      ---------------------
+      | | | | | |x|y|z|w| |
+      ---------------------
+      ```
+
+  becomes:
+
+      ```
+              pos   end
+               |     |
+               v     v
+      ---------------------
+      |x|y|z|w|a|b|c| | | |
+      ---------------------
+      ```
+
+  after the buffer is filled again with new data.
+
+* all the searches are done within this buffer. Additional data is kept when
+  it's needed when printing context lines.
+
+* the `Searcher` class fills the buffer, runs the `Grep` matcher and if it
+  matches, prints the output according to the options (context lines, line
+  numbers) and counts the number of matches.
+
+* note that the `InputBuffer` is taken by reference, so it is meant to be reused
+  across different `run`. The `run` itself goes through the whole file and
+  consumes `self`. So, to run again you need a new `Searcher` instance. This is
+  smart because it reduces the possibility to misuse the struct, by providing a
+  new input file without updating the file path accordingly.
+
 
 search_buffer.rs
 ----------------
 
+Duties:
+
+* search within a memory mapped file;
+* it doesn't support showing context;
+
+What's interesting in there?
+
+* reuses some functions and types of the `search_stream` module; it doesn't need
+  the `InputBuffer` struct, since it can freely seek into the memory. It doesn't
+  actually seek back because context is not implemented.
+
+Suggestions:
+
+* instead of depending directly on `search_stream` it would have been better to
+  move the common parts into a separate parent module.
 
 printer.rs
 ----------
@@ -171,11 +223,30 @@ Duties:
 * supports options and forwards writes to the inner `Terminal` type, which must
   be `Send` also (I still don't understand why).
 
+grep crate
+----------
+
+Duties:
+
+* takes a line and performs a regex search into it;
+
+What's interesting in there?
+
+* it builds on top of the `regex` crate and adds some optimizations in
+  `literals.rs`.
+* BurntSushi blog post already explains very well the implementation details,
+  which are very interesting.
+* the result is simply a `Match` instance (namely a start and end positions).
+* `Grep` is clonable, so it needs to be built only once and then cloned for all
+  the workers.
 
 Overall notes
 -------------
 
 * extensive usage of `#[inline(always)]` and `#[inline(never)]` directives; I
   wonder if those have been added after profiling and if so, why the compiler
-  have failed to identify those correctly.
+  have failed to identify those correctly. The only possible use case is
+  intra-crate inlining, but compiling with `rustc -C lto` already allows to
+  inline everything (by slowing down compilation). See [When should I use
+  inline](https://internals.rust-lang.org/t/when-should-i-use-inline/598).
 * why `eprintln!` macro instead of log macros?
