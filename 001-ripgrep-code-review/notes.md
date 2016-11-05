@@ -94,7 +94,17 @@ How does the output is managed?
 * There's a printer that refers to a terminal;
 * This is passed to the worker when the actual job has to be performed (the
   `do_work` function);
-* The worker forwards the printer to the actual searcher.
+* The worker has an `outbuf` member that is a `ColoredTerminal`. It is taken out
+  of the member and passed by value to a new `Printer` instance;
+* The worker forwards the printer to the actual searcher;
+* After the work has been done on this file, the printer is destructured and the
+  outbuffer is taken out again.
+* Then the member `out`, which is shared and synchronized across all the
+  workers, is locked, and all the output coming from the outbuffer is written to
+  it;
+* The interesting part is how the outbuffer is stored in the worker as an
+  `Option`, so it can be taken out and passed by value to the printer, and then
+  put back in place when no more needed.
 
 How the files are managed:
 
@@ -214,12 +224,37 @@ Suggestions:
 * instead of depending directly on `search_stream` it would have been better to
   move the common parts into a separate parent module.
 
+out.rs
+------
+
+Duties:
+
+`Out` struct:
+
+* controls the actual output for all the search results belonging to the same
+  file to the user;
+* given a terminal as a buffer, it will write the separators and all the output
+  it contains to the inner terminal.
+
+`ColoredTerminal` struct:
+
+* it wraps a `Terminal` from the `term` crate that can be transferred across
+  thread bundaries (it implements `Send`), and it could be coloured or not;
+* if the `color` option is set to true, it tries to initialize a terminal with
+  coloring; if not possible backs up with a non colored one.
+
+What's interesting in there?
+
+* the terminfo structure is parsed only once for perf reasons, by using
+  `lazy_static!`.
+
 printer.rs
 ----------
 
 Duties:
 
 * handles the ouptut logic for the crate;
+* it knows how to print a match, given its options;
 * supports options and forwards writes to the inner `Terminal` type, which must
   be `Send` also (I still don't understand why).
 
