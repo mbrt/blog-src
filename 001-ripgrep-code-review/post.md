@@ -71,4 +71,4 @@ Ripgrep is a command line tool for searching file contents using regular
 expressions, similar to GNU grep. The tool is not a single crate, but split
 across four: the main one, `ignore`, `grep` and `globset`.
 
-![Crates](crates.svg)
+![Crates](https://github.com/mbrt/blog/raw/master/001-ripgrep-code-review/crates.svg)
