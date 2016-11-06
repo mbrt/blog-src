@@ -115,7 +115,7 @@ operations did not fail, otherwise it selects the `Err` branch, handling errors
 for both the first and the second operation. Then the main exit code depends on
 whether there have been matches or not.
 
-```
+```rust
 fn run(args: Args) -> Result<u64>;
 ```
 
