@@ -21,7 +21,7 @@ half, and as many other people already said, the best of it is the very
 welcoming and helpful community. There are a lot of online resources that help
 you to get started: the [Rust book](https://doc.rust-lang.org/book/), the
 [Rustonomicon](https://doc.rust-lang.org/nomicon/) and many blog posts and stack
-overflow questions. After I learnt the basics though, I felt a bit lost, since
+overflow questions. After I learned the basics I felt a bit lost though, since
 not many advanced topics are available. As a C++ developer I miss indeed books
 like [Effective C++](http://www.aristeia.com/books.html) from Scott Meyers, and
 people like [Herb Sutter](https://herbsutter.com/). They provide a lot of
@@ -39,8 +39,8 @@ is a great example of good Rust, in my opinion.
 I'm not going to explain everything about the crate, since there is already a
 very good [blog post](http://blog.burntsushi.net/ripgrep/) by Andrew himself,
 explaining how the application works from a functional perspective, compared to
-GNU grep, the Silver searcher, and other similar tools. Our perspective is
-instead more implementation driven. We are going to walk through the crate
+GNU grep, the Silver Searcher (`ag`), and other similar tools. Our perspective
+is instead more implementation driven. We are going to walk through the crate
 architecture. As a side note, this post is not intended for complete beginners
 since I'm going to take for granted the basics. If you need some of them, just
 take a look at the resources I mentioned before.
@@ -50,7 +50,7 @@ So, without further ado, let's get started.
 The big picture
 ---------------
 
-We are going to look at a specific version of the crate:
+We are going to look at this specific version of the crate:
 
 ```
 $ git describe
@@ -67,3 +67,8 @@ $ cd ripgrep
 $ git checkout f728708
 ```
 
+Ripgrep is a command line tool for searching file contents using regular
+expressions, similar to GNU grep. The tool is not a single crate, but split
+across four: the main one, `ignore`, `grep` and `globset`.
+
+![Crates](crates.svg)
