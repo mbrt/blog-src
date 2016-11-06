@@ -275,6 +275,18 @@ What's interesting in there?
 * `Grep` is clonable, so it needs to be built only once and then cloned for all
   the workers.
 
+globset crate
+-------------
+
+Duties:
+
+* it uses regex to perform glob matching over paths, the unix way;
+* it takes one or more glob patterns at once and tests a path against them, it
+  then returns whether the path has matched and for which patterns.
+
+ignore crate
+------------
+
 Overall notes
 -------------
 

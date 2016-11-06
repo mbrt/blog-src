@@ -68,7 +68,15 @@ $ git checkout f728708
 ```
 
 Ripgrep is a command line tool for searching file contents using regular
-expressions, similar to GNU grep. The tool is not a single crate, but split
-across four: the main one, `ignore`, `grep` and `globset`.
+expressions, similar to GNU grep. The tool is split across four crates: the main
+one, `ignore`, `grep` and `globset`.
 
 ![Crates](https://cdn.rawgit.com/mbrt/blog/master/001-ripgrep-code-review/crates.svg)
+
+The `grep` crate provides line-by-line regex searching into a buffer and it is
+used only by the main crate. The `globset` crate uses regex to perform
+[glob matching](https://en.wikipedia.org/wiki/Glob_(programming)) over paths. It
+is used by the main and the `ignore` crates. The `ignore` crate implements
+directory walking, ignore and include patterns. It uses the `glob` crate for
+that.  Finally, the main crate, which is the glue for everything, implementing
+also command line argument parsing, output handling and multi-threading.
