@@ -3,6 +3,13 @@ Ripgrep code review
 
 Reviewed version: 0.2.5-4-gf728708
 
+TODO:
+
+* [ ] Check diagrams colors
+* [ ] Change all the images URLs from `https://rawgit.com` to
+      `http://cdn.rawgit.com`;
+* [ ] Spellcheck everything;
+
 Big picture
 -----------
 
