@@ -126,9 +126,10 @@ if so, this is the way it setups the things:
 ![Main](https://rawgit.com/mbrt/blog/master/001-ripgrep-code-review/main.svg)
 
 The main thread, controlled by the `run` function digs files from the
-filesystem, and pushes them into a [`deque`](https://crates.io/crates/deque).
+filesystem, and pushes them into a [deque](https://crates.io/crates/deque).
 This is a Single-producer / Multiple-consumers queue, from which multiple worker
-threads can pull at the same time:
+threads can pull at the same time, and perform the search operations. Here is
+the workers initialization in the `run` function:
 
 ```rust
 let workq = {
@@ -144,14 +145,15 @@ let workq = {
 };
 ```
 
-As you can see, the `deque` is composed by two objects, one end is the `workq`
-from which the main thread can push, and the other end is the `stealer`, from
-which all the workers can pull. In every iteration of the loop a new worker is
-created and moved to a new thread, along with a `stealer`. Note that the
-`stealer` is [cloneable](https://doc.rust-lang.org/std/clone/trait.Clone.html),
+As you can see, the `deque::new()` returns two objects. The queus is indeed
+composed by two ends. One is the `workq` from which the main thread can push,
+and the other end is the `stealer`, from which all the workers can pull. In
+every iteration of the loop a new worker is created and moved to a new thread,
+along with a `stealer`. Note that the `stealer` is
+[cloneable](https://doc.rust-lang.org/std/clone/trait.Clone.html),
 but this doesn't mean that the queue itself is cloned. Internally indeed the
 `stealer` contains an
-[`Arc`](https://doc.rust-lang.org/std/sync/struct.Arc.html) to the queue:
+[Arc](https://doc.rust-lang.org/std/sync/struct.Arc.html) to the queue:
 
 ```rust
 pub struct Stealer<T: Send> {
@@ -162,20 +164,161 @@ pub struct Stealer<T: Send> {
 To note here is the beauty of the `deque` interface. To express the fact that
 the producer is only one, but the consumers can be multiple, the type is split
 in two: the producer is then
-[`Send`](https://doc.rust-lang.org/std/marker/trait.Send.html) but not
-[`Sync`](https://doc.rust-lang.org/std/marker/trait.Sync.html), nor
-[`Clone`](https://doc.rust-lang.org/std/clone/trait.Clone.html). There is no way
+[Send](https://doc.rust-lang.org/std/marker/trait.Send.html) but not
+[Sync](https://doc.rust-lang.org/std/marker/trait.Sync.html), nor
+[Clone](https://doc.rust-lang.org/std/clone/trait.Clone.html). There is no way
 to use it from multiple threads, since you can yeld the instance to another
 thread, but you can't keep another reference to it. The `Stealer`, which
 is the other end, is instead both `Send` and `Clone`. You can then pass them
 around by cloning and sending them off to other threads. They will all refer to
 the same queue. There is no way to use this interface incorrectly.
 
-Another thing to note is that the block returns only the producer end of the
-`deque`, and the workers are pushed into a vector. A good suggestion here: try
-to keep the variables the most scoped as possible. The `run` function is not
-polluted with a lot of variables used only in this place. They are inside this
-block that returns only the minimum needed by the rest of the function.
+Another thing to note here is that the result of the block is just the producer
+part of the `deque`. The worker threads are pushed into a vector. The workers
+along with their stealers are moved into the threads. The use of a block that
+just returns what is needed for the rest of the function is a good practice. In
+this way the `run` function is not polluted with variables that are not usable
+anymore because their values have been moved.
+
+This is the `MultiWorker` struct, that runs in a separate thread:
+
+```rust
+struct MultiWorker {
+    chan_work: Stealer<Work>,
+    quiet_matched: QuietMatched,
+    out: Arc<Mutex<Out>>,
+    #[cfg(not(windows))]
+    outbuf: Option<ColoredTerminal<term::TerminfoTerminal<Vec<u8>>>>,
+    #[cfg(windows)]
+    outbuf: Option<ColoredTerminal<WindowsBuffer>>,
+    worker: Worker,
+}
+```
+
+the first field is the stealer. As you can see from its type, the items it
+contains are `Work` structs:
+
+```rust
+enum Work {
+    Stdin,
+    File(DirEntry),
+    Quit,
+}
+```
+
+The main thread will push them from its `workq` variable:
+
+```rust
+for dent in args.walker() {
+    if quiet_matched.has_match() {
+        break;
+    }
+    paths_searched += 1;
+    if dent.is_stdin() {
+        workq.push(Work::Stdin);
+    } else {
+        workq.push(Work::File(dent));
+    }
+}
+```
+
+The `args.walker()` is an iterator over the files to search, or standard input
+if the `-` argument is passed. In the former case it pushes a `Work::File` entry
+with the path, in the latter it pushes a `Work::Stdin` entry.
+
+The `MultiWorker::run` function is a loop that pops from the `deque` entries to
+process one by one:
+
+```rust
+loop {
+    if self.quiet_matched.has_match() {
+        break;
+    }
+    let work = match self.chan_work.steal() {
+        Stolen::Empty | Stolen::Abort => continue,
+        Stolen::Data(Work::Quit) => break,
+        Stolen::Data(Work::Stdin) => WorkReady::Stdin,
+        Stolen::Data(Work::File(ent)) => {
+            match File::open(ent.path()) {
+                Ok(file) => WorkReady::DirFile(ent, file),
+                Err(err) => {
+                    eprintln!("{}: {}", ent.path().display(), err);
+                    continue;
+                }
+            }
+        }
+    };
+    // ...
+}
+```
+
+The `steal()` method tries to pop from the `deque` and returns a `Stolen`
+instance:
+
+```rust
+pub enum Stolen<T> {
+    /// The deque was empty at the time of stealing
+    Empty,
+    /// The stealer lost the race for stealing data, and a retry may return more
+    /// data.
+    Abort,
+    /// The stealer has successfully stolen some data.
+    Data(T),
+}
+```
+
+The outcome is matched against the different possibilities, and only
+`Stolen::Data` contains a `Work` entry. Both `Stdin` and `File` are then
+translated into a `WorkReady` instance. In the second case the file is then
+opened with an `std::fs::File`. The `work` variable is later consumed by a
+`Worker` instance:
+
+```rust
+self.worker.do_work(&mut printer, work);
+```
+
+We'll get back to that afterwords, but let's first backtrack to the
+`MultiWorker::run` loop. The `Work::Quit` case breaks it, so the thread
+terminates:
+
+```rust
+let work = match self.chan_work.steal() {
+    // ...
+    Stolen::Data(Work::Quit) => break,
+    // ...
+```
+
+This value is pushed by the main thread when all the files have been examinated:
+
+```rust
+for _ in 0..workers.len() {
+    workq.push(Work::Quit);
+}
+let mut match_count = 0;
+for worker in workers {
+    match_count += worker.join().unwrap();
+}
+```
+
+The threads are all guaranteed to terminate, because the number of pushed `Quit`
+messages is the same as the number of workers. A worker can only consume one of
+them and then quit. This implies that, since no messages can be lost, all the
+workers will get the message at some point and then terminate. All the workers
+threads are then joined, waiting for completion.
+
+This is a good multi-threading pattern to follow:
+
+* a `deque` in between a producer (that doesn't have to do intensive jobs) and a
+  bunch of consumers (that do the heavy lifting) in separate threads;
+* the `deque` carries an enumeration of the things to do, and one of them is the
+  `Quit` action;
+* the producer will eventually push a bunch of `Quit` messages to terminate the
+  worker threads.
+
+In case you just have one type of job, it makes perfect sense to use an
+`Option<Stuff>` as work item. The workers will terminate in case `None` is
+passed. The use of an `Option` can be done even in the `ripgrep` case, but I'm
+not sure the code will be more readable.
 
 The file listing
 ----------------
