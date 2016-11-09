@@ -317,12 +317,73 @@ This is a good multi-threading pattern to follow:
 
 In case you just have one type of job, it makes perfect sense to use an
 `Option<Stuff>` as work item. The workers will terminate in case `None` is
-passed. The use of an `Option` can be done even in the `ripgrep` case, but I'm
-not sure the code will be more readable.
+passed. The `Option` can be used also in the `ripgrep` case, replacing the
+`Quit` message but I'm not sure the code would be more readable.
+
+This was the multi-threading operational mode. `ripgrep` can however operate in
+a single thread, in case there is only one file to search or only one core to
+use, or the user says so. The `run` function checks that:
+
+```rust
+let threads = cmp::max(1, args.threads() - 1);
+let isone =
+    paths.len() == 1 && (paths[0] == Path::new("-") || paths[0].is_file());
+// ...
+if threads == 1 || isone {
+    return run_one_thread(args.clone());
+}
+```
+
+and calls the `run_one_thread` function for the single-threaded case (I have
+removed some uninteresting details):
+
+```rust
+fn run_one_thread(args: Arc<Args>) -> Result<u64> {
+    let mut worker = Worker {
+        args: args.clone(),
+        inpbuf: args.input_buffer(),
+        grep: args.grep(),
+        match_count: 0,
+    };
+    // ...
+    for dent in args.walker() {
+        // ...
+        if dent.is_stdin() {
+            worker.do_work(&mut printer, WorkReady::Stdin);
+        } else {
+            let file = match File::open(dent.path()) {
+                Ok(file) => file,
+                Err(err) => {
+                    eprintln!("{}: {}", dent.path().display(), err);
+                    continue;
+                }
+            };
+            worker.do_work(&mut printer, WorkReady::DirFile(dent, file));
+        }
+    }
+    // ...
+}
+```
+
+As you can see, the function uses a single `Worker`. If you remember, this struct
+is also used by `MultiWorker`. The files to search are iterated by
+`args.walker()` as before, and each entry is passed to the `worker`, as before.
+The use of `Worker` across these two cases allows code reuse at a great extent.
 
 The file listing
 ----------------
 
+We are now going to look over the file listing functional block.
+
 The default operation mode of `ripgrep` is to search recursively for non-binary,
-non-ignored files, starting from the current directory. To feed the search
-engines for those files, it uses the `ignore` crate.
+non-ignored files, starting from the current directory (or from the given
+paths). To feed the search engines for those files, it uses the `ignore` crate.
+
+But let's start from the beginning. The `walker` function provided by `Args`
+returns a `Walk` struct:
+
+```rust
+pub fn walker(&self) -> Walk;
+```
+
+`Walk` is just a simple wrapper around the `ignore::Wrapper` struct.
