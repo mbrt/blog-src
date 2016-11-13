@@ -376,8 +376,9 @@ The file listing
 We are now going to look over the file listing functional block.
 
 The default operation mode of `ripgrep` is to search recursively for non-binary,
-non-ignored files, starting from the current directory (or from the given
-paths). To feed the search engines for those files, it uses the `ignore` crate.
+non-ignored files starting from the current directory (or from the given
+paths). To enumerate the files and feed the search engine, `ripgrep` uses the
+`ignore` crate.
 
 But let's start from the beginning. The `walker` function provided by `Args`
 returns a `Walk` struct:
@@ -386,4 +387,65 @@ returns a `Walk` struct:
 pub fn walker(&self) -> Walk;
 ```
 
-`Walk` is just a simple wrapper around the `ignore::Wrapper` struct.
+`Walk` is just a simple wrapper around the `ignore::Walk` struct. A value of
+this struct can be created by using the `new` method:
+
+```rust
+pub fn new<P: AsRef<Path>>(path: P) -> Walk;
+```
+
+or with a `WalkBuilder`, that implements the
+[builder pattern](https://doc.rust-lang.org/book/method-syntax.html#builder-pattern).
+This allows to customize the behavior without annoying the user to provide a lot
+of parameters to the constructor:
+
+```rust
+let w = WalkBuilder::new(path).ignore(true).max_depth(Some(5)).build();
+```
+
+In this example we have specified only two parameters; all the others will be
+defaulted.
+
+The implementation of the type is not very interesting from our point of view.
+It is basically an `Iterator` that walks through the filesystem by using the
+`walkdir` crate, but ignores the files and directories listed in `.gitignore`
+and `.ignore` files possibly present, with the help of the `Ignore` type.
+
+An interesting bit is instead the `Error` type:
+
+```rust
+#[derive(Debug)]
+pub enum Error {
+    Partial(Vec<Error>),
+    WithLineNumber { line: u64, err: Box<Error> },
+    WithPath { path: PathBuf, err: Box<Error> },
+    Io(io::Error),
+    Glob(String),
+    UnrecognizedFileType(String),
+    InvalidDefinition,
+}
+```
+
+This error type has an interesting recursive definition. The `Partial` case of
+the enumeration contains a vector of `Error`s, for example. `WithLineNumber`
+adds line information to an `Error`. In this case `Box<Error>` since a recursive
+type cannot embed itself, otherwise it would be impossible to compute the size
+of the type.
+
+Then the [error::Error](https://doc.rust-lang.org/std/error/trait.Error.html),
+[fmt::Display](https://doc.rust-lang.org/std/fmt/trait.Display.html) and
+[`From<io::Error>`](https://doc.rust-lang.org/std/convert/trait.From.html)
+traits are implemented, to make it a proper error type, and to easily convert an
+`io::Error` into it. Here the boilerplate necessary to crank up the error type
+are handcrafted. Another possibility would have been to use the
+[quick-error](https://github.com/tailhook/quick-error) macro, which reduces the
+burden to implement error types to a minimum. A good reference on the error
+handling topic is present in
+[the Rust book](https://doc.rust-lang.org/stable/book/error-handling.html).
+
+### Ignore patterns
+
+Ignore patterns are handled within the `ignore` crate by the `Ignore` struct.
+This type connects directory traversal with ignore semantics. In practice it
+builds a tree-like structure that mimics the directories structure, in which
+leaves are new ignore contexts. The implementation is quite complicated.
