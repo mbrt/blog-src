@@ -294,6 +294,52 @@ Duties:
 ignore crate
 ------------
 
+Duties:
+
+* connects directory traversal with ignore semantics;
+* it builds a tree-like structure that mimics the directories structure, in which
+  leaves are new ignore contexts.
+
+What's interesting in there?
+
+* the idea is simple, the implementation complex;
+
+* `Ignore` struct that contains `Arc<IgnoreInner>`;
+    * they form an immutable tree-like structure, in which every change to the
+      structure means copying the modified parts; this allows the structure to
+      be used in parallel, while iterating.
+
+* this, in turn, contains
+    * `Arc` to some `Gitignore` instances for overrides;
+    * explicit ignores, global gitignores;
+    * specific instances of `Gitignore` for ignore files, exclude files;
+    * an `Option<Ignore>` as parent;
+    * a `compiled` cache for all the paths already converted as `Ignore`:
+      an `Arc<RwLock<HashMap<OsString, Ignore>>>`;
+
+* adding a new child path means creating some glob matchers and put them into a
+  new `Ignore` instance, with the `parent` set as this `Ignore`.
+
+* adding a new parent means trying to reuse `Ignore` instances from the
+  `compiled` cache, or creating a new `Ignore`. In this case `self` is not
+  modified, but cloned and modified to point to the new parent.
+
+* the signature of `add_parents`:
+
+  ```rust
+  pub fn add_parents<P: AsRef<Path>>(&self, path: P) -> (Ignore, Option<Error>);
+  ```
+
+  it allows partial failures, by returning always the result and optionally an
+  error, that could contain a vector of errors:
+
+  ```rust
+  pub enum Error {
+      // ...
+      Partial(Vec<Error>),
+  }
+  ```
+
 Overall notes
 -------------
 
