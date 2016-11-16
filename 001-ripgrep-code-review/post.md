@@ -396,8 +396,8 @@ pub fn new<P: AsRef<Path>>(path: P) -> Walk;
 
 or with a `WalkBuilder`, that implements the
 [builder pattern](https://doc.rust-lang.org/book/method-syntax.html#builder-pattern).
-This allows to customize the behavior without annoying the user to provide a lot
-of parameters to the constructor:
+This allows to customize the behavior without annoying the user, forcing them
+to provide a lot of parameters to the constructor:
 
 ```rust
 let w = WalkBuilder::new(path).ignore(true).max_depth(Some(5)).build();
@@ -409,9 +409,8 @@ defaulted.
 The implementation of the type is not very interesting from our point of view.
 It is basically an `Iterator` that walks through the filesystem by using the
 `walkdir` crate, but ignores the files and directories listed in `.gitignore`
-and `.ignore` files possibly present, with the help of the `Ignore` type.
-
-An interesting bit is instead the `Error` type:
+and `.ignore` files possibly present, with the help of the `Ignore` type. We
+will look at that type a bit later. Let's look at the `Error` type first:
 
 ```rust
 #[derive(Debug)]
@@ -428,16 +427,16 @@ pub enum Error {
 
 This error type has an interesting recursive definition. The `Partial` case of
 the enumeration contains a vector of `Error`s, for example. `WithLineNumber`
-adds line information to an `Error`. In this case `Box<Error>` since a recursive
-type cannot embed itself, otherwise it would be impossible to compute the size
-of the type.
+adds line information to an `Error`. In this case `Box<Error>`, since a
+recursive type cannot embed itself, otherwise it would be impossible to compute
+the size of the type.
 
 Then the [error::Error](https://doc.rust-lang.org/std/error/trait.Error.html),
 [fmt::Display](https://doc.rust-lang.org/std/fmt/trait.Display.html) and
 [`From<io::Error>`](https://doc.rust-lang.org/std/convert/trait.From.html)
-traits are implemented, to make it a proper error type, and to easily convert an
-`io::Error` into it. Here the boilerplate necessary to crank up the error type
-are handcrafted. Another possibility would have been to use the
+traits are implemented, to make it a proper error type and to easily construct
+it out an `io::Error`. Here the boilerplate necessary to crank up the error type
+are handcrafted. Another possibility could have been to use the
 [quick-error](https://github.com/tailhook/quick-error) macro, which reduces the
 burden to implement error types to a minimum. A good reference on the error
 handling topic is present in
@@ -448,4 +447,80 @@ handling topic is present in
 Ignore patterns are handled within the `ignore` crate by the `Ignore` struct.
 This type connects directory traversal with ignore semantics. In practice it
 builds a tree-like structure that mimics the directories structure, in which
-leaves are new ignore contexts. The implementation is quite complicated.
+leaves are new ignore contexts. The implementation is quite complicated, but
+let's have a brief look at it:
+
+```rust
+#[derive(Clone, Debug)]
+pub struct Ignore(Arc<IgnoreInner>);
+
+#[derive(Clone, Debug)]
+struct IgnoreInner {
+    compiled: Arc<RwLock<HashMap<OsString, Ignore>>>,
+    dir: PathBuf,
+    overrides: Arc<Override>,
+    types: Arc<Types>,
+    parent: Option<Ignore>,
+    is_absolute_parent: bool,
+    absolute_base: Option<Arc<PathBuf>>,
+    explicit_ignores: Arc<Vec<Gitignore>>,
+    ignore_matcher: Gitignore,
+    git_global_matcher: Arc<Gitignore>,
+    git_ignore_matcher: Gitignore,
+    git_exclude_matcher: Gitignore,
+    has_git: bool,
+    opts: IgnoreOptions,
+}
+```
+
+I have taken out the comments to make it short, but you can find them in
+`ignore/src/dir.rs`. The `Ignore` struct is a wrapper around an atomic reference
+counter to the actual data (i.e. `IgnoreInner`). A first interesting field
+inside that struct is `parent`, that is an `Option<Ignore>`, so it points to a
+parent if it is present. This is how the tree structure is implemented. Since
+the `Arc` can be shared, multiple `Ignore` can share the same parent. But that
+is not all; they can be also cached. The `compiled` field has a mouthful type:
+
+```rust
+Arc<RwLock<HashMap<OsString, Ignore>>>
+```
+
+but this is the cache of `Ignore` instances that is shared among all of them.
+Let's try to break it down:
+
+* the `HashMap` maps paths to `Ignore` instances (as expected);
+* the `RwLock` allows the map to be shared and modified across different
+  threads, without causing data races;
+* and finally the `Arc` allow the cache to be owned safely by different threads.
+
+every time a new `Ignore` instance has to be built and added to a tree, the
+implementation first looks in the cache, trying to reuse the existing instances.
+The tree is built dynamically, while crawling the directories, looking for the
+specific ignore files (e.g. `.gitignore`, `.ignore`, `.rgignore`) and support
+custom ignores.
+
+Another interesting bit is the `add_parents` signature for `Ignore`:
+
+```rust
+pub fn add_parents<P: AsRef<Path>>(&self, path: P) -> (Ignore, Option<Error>);
+```
+
+instead of returning a `Result<Ignore, Error>` it uses a pair, returning always
+a result and optionally an error. In this way partial failures are allowed. If
+you remember, the error can also be an array of errors, so the function can
+collect them all while working and do it's best, but then it can also return a
+(maybe partial) result. I found this approach very interesting.
+
+The search process
+------------------
+
+In this section we will look at how the modules and types that search into one
+file are organized. This process involves some modules in `ripgrep` and the
+`grep` crate.
+
+Everything starts from `Worker::do_work` in `main.rs`. Based on the type of the
+file passed in, `search` or `search_mmap` are in turn called. The first function
+is used to read the input one chunk at a time and then search, while the
+second is used to search into a memory mapped input. In this case there is no
+need to read the file into a buffer, because it is already available in memory,
+or more precisely, the kernel will take care of this illusion.

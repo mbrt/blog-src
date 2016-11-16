@@ -176,25 +176,25 @@ What's interesting in there?
   from an input and has the option to keep part of the data across multiple
   calls:
 
-      ```
-               keep   end
-                 |     |
-                 v     v
-      ---------------------
-      | | | | | |x|y|z|w| |
-      ---------------------
-      ```
+  ```
+           keep   end
+             |     |
+             v     v
+  ---------------------
+  | | | | | |x|y|z|w| |
+  ---------------------
+  ```
 
   becomes:
 
-      ```
-              pos   end
-               |     |
-               v     v
-      ---------------------
-      |x|y|z|w|a|b|c| | | |
-      ---------------------
-      ```
+  ```
+          pos   end
+           |     |
+           v     v
+  ---------------------
+  |x|y|z|w|a|b|c| | | |
+  ---------------------
+  ```
 
   after the buffer is filled again with new data.
 
@@ -229,7 +229,7 @@ What's interesting in there?
 Suggestions:
 
 * instead of depending directly on `search_stream` it would have been better to
-  move the common parts into a separate parent module.
+  move the common parts into a separate parent or utility module.
 
 out.rs
 ------
