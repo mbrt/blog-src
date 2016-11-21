@@ -145,7 +145,7 @@ let workq = {
 };
 ```
 
-As you can see, the `deque::new()` returns two objects. The queus is indeed
+As you can see, the `deque::new()` returns two objects. The queue is indeed
 composed by two ends. One is the `workq` from which the main thread can push,
 and the other end is the `stealer`, from which all the workers can pull. In
 every iteration of the loop a new worker is created and moved to a new thread,
@@ -167,7 +167,7 @@ in two: the producer is then
 [Send](https://doc.rust-lang.org/std/marker/trait.Send.html) but not
 [Sync](https://doc.rust-lang.org/std/marker/trait.Sync.html), nor
 [Clone](https://doc.rust-lang.org/std/clone/trait.Clone.html). There is no way
-to use it from multiple threads, since you can yeld the instance to another
+to use it from multiple threads, since you can yield the instance to another
 thread, but you can't keep another reference to it. The `Stealer`, which
 is the other end, is instead both `Send` and `Clone`. You can then pass them
 around by cloning and sending them off to other threads. They will all refer to
@@ -288,7 +288,7 @@ let work = match self.chan_work.steal() {
     // ...
 ```
 
-This value is pushed by the main thread when all the files have been examinated:
+This value is pushed by the main thread when all the files have been examined:
 
 ```rust
 for _ in 0..workers.len() {
