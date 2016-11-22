@@ -514,13 +514,76 @@ collect them all while working and do it's best, but then it can also return a
 The search process
 ------------------
 
-In this section we will look at how the modules and types that search into one
-file are organized. This process involves some modules in `ripgrep` and the
-`grep` crate.
+In this section we will look at how the regex search inside a file is
+implemented. This process involves some modules in `ripgrep` and also the `grep`
+crate.
 
 Everything starts from `Worker::do_work` in `main.rs`. Based on the type of the
 file passed in, `search` or `search_mmap` are in turn called. The first function
-is used to read the input one chunk at a time and then search, while the
-second is used to search into a memory mapped input. In this case there is no
-need to read the file into a buffer, because it is already available in memory,
-or more precisely, the kernel will take care of this illusion.
+is used to read the input one chunk at a time and then search, while the second
+is used to search into a memory mapped input. In this case there is no need to
+read the file into a buffer, because it is already available in memory, or more
+precisely, the kernel will take care of this illusion.
+
+The `search` function just creates a new `Searcher` and calls `run` on it.
+
+```rust
+impl<'a, R: io::Read, W: Terminal + Send> Searcher<'a, R, W> {
+    pub fn run(mut self) -> Result<u64, Error>;
+}
+```
+
+The first interesting thing to note here is that the `run` function actually
+consumes `self`, so you can't actually run it twice with the same instance. Why
+is that? Let's have a look at the `new` method, that creates this struct:
+
+```rust
+impl<'a, R: io::Read, W: Terminal + Send> Searcher<'a, R, W> {
+    pub fn new(inp: &'a mut InputBuffer,
+               printer: &'a mut Printer<W>,
+               grep: &'a Grep,
+               path: &'a Path,
+               haystack: R) -> Searcher<'a, R, W>;
+}
+```
+
+It takes a bunch of arguments and stores them into a new `Searcher` instance.
+All the arguments to `Searcher` are passed as reference, except `haystack` which
+is the `Read` stream representing the file. This means that when this struct
+will be destroyed, the file will be gone. Whenever you complete the search for a
+file, you don't have to do it again, indeed. You can enforce this usage by
+consuming the input file in the `run` function, or take its ownership in the
+constructor and force the `run` function to consume `self`.
+
+Since we cannot run the search twice using the same `Searcher` instance, why
+don't we just use a function then? The approach used here has several advantages:
+
+1. you get the behavior that the search cannot be run twice with the same file
+   (nothing that a free function could not do);
+2. you can split the function among different private functions, without passing
+   around all the arguments; they will all take `self` by reference (maybe also
+   `&mut self`) and just refer to the member variables.
+
+So, instead of:
+
+```rust
+fn helper1(&self,
+           inp: &mut InputBuffer,
+           printer: &mut Printer<W>,
+           grep: &Grep,
+           path: &Path,
+           haystack: &mut R)
+{
+    // do something with path, grep, etc
+}
+```
+
+we have:
+
+```rust
+fn helper1(&mut self) {
+    // do something with self.path, self.grep, etc
+}
+```
+
+The end result is much nicer.
