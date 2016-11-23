@@ -85,8 +85,8 @@ Everything starts from the ~ripgrep~ main function:
 #+END_SRC
 
 It is very concise: it parses the command line arguments and then passes them to
-the ~run~ function. In between them there is the [[https://doc.rust-lang.org/std/result/enum.Result.html#method.and_then][~Result::and_then~]] combinator,
-so the ~match~ statement gets to the ~Ok~ branch only if both operations did not
+the ~run~ function. In between them there is the [[https://doc.rust-lang.org/std/result/enum.Result.html#method.and_then][Result::and_then]] combinator, so
+the ~match~ statement gets to the ~Ok~ branch only if both operations did not
 fail, otherwise it selects the ~Err~ branch, handling errors for both the first
 and the second operation. Then the main exit code depends on whether there have
 been matches or not.
@@ -400,12 +400,12 @@ adds line information to an ~Error~. In this case ~Box<Error>~, since a
 recursive type cannot embed itself, otherwise it would be impossible to compute
 the size of the type.
 
-Then the [[https://doc.rust-lang.org/std/error/trait.Error.html][error::Error]], [[https://doc.rust-lang.org/std/fmt/trait.Display.html][fmt::Display]] and [[https://doc.rust-lang.org/std/convert/trait.From.html][~From<io::Error>~]] traits are
-implemented, to make it a proper error type and to easily construct it out an
-~io::Error~. Here the boilerplate necessary to crank up the error type are
-handcrafted. Another possibility could have been to use the [[https://github.com/tailhook/quick-error][quick-error]] macro,
-which reduces the burden to implement error types to a minimum. A good reference
-on the error handling topic is present in [[https://doc.rust-lang.org/stable/book/error-handling.html][the Rust book]].
+Then the [[https://doc.rust-lang.org/std/error/trait.Error.html][error::Error]], [[https://doc.rust-lang.org/std/fmt/trait.Display.html][fmt::Display]] and [[https://doc.rust-lang.org/std/convert/trait.From.html][From<io::Error>]] traits are implemented,
+to make it a proper error type and to easily construct it out an ~io::Error~.
+Here the boilerplate necessary to crank up the error type are handcrafted.
+Another possibility could have been to use the [[https://github.com/tailhook/quick-error][quick-error]] macro, which reduces
+the burden to implement error types to a minimum. A good reference on the error
+handling topic is present in [[https://doc.rust-lang.org/stable/book/error-handling.html][the Rust book]].
 
 ** Ignore patterns
 
@@ -444,7 +444,8 @@ counter to the actual data (i.e. ~IgnoreInner~). A first interesting field
 inside that struct is ~parent~, that is an ~Option<Ignore>~, so it points to a
 parent if it is present. This is how the tree structure is implemented. Since
 the ~Arc~ can be shared, multiple ~Ignore~ can share the same parent. But that
-is not all; they can be also cached. The ~compiled~ field has a mouthful type:
+is not all; they can be also cached. The ~compiled~ field's type is too much of
+a mouthful:
 
 #+BEGIN_SRC rust
   Arc<RwLock<HashMap<OsString, Ignore>>>
@@ -551,3 +552,67 @@ we have:
 #+END_SRC
 
 The end result is much nicer.
+
+The first variable that the ~Searcher~ takes is an ~InputBuffer~. It is defined
+in the ~search_stream~ module too, and it provides buffering for the input file
+and it has the interesting feature to optionally keep part of the data across
+reads. This is need, for example, when context lines are needed by the user, or
+when a single read is not enough to reach the end of the current line.
+
+The ~fill~ function reads from the input and optionally rolls over the contents
+of the buffer starting from the ~keep_from~ index:
+
+#+BEGIN_SRC rust
+  fn fill<R: io::Read>(&mut self, rdr: &mut R, keep_from: usize) -> Result<bool, io::Error>;
+#+END_SRC
+
+the interesting implementation bit here is that the buffer grows whenever it
+needs more room, but it never shrinks. This avoids some reallocations, at the
+expense of memory. This approach is perfectly fine in this case, since the
+application is intended to work in one shot and then terminate. In a long
+running task such as a webserver, this is probably not what you want to do.
+
+After the buffer has been filled, the ~Grep~ matcher is run, and in case of a
+match, the results are printed, according to the options (context lines, line
+numbers, etc.).
+
+Note that the input buffer is taken by mutable reference by the ~Searcher~
+instance. This means that it can be reused for the next file, without allocating
+new memory for the buffer, with a new ~Searcher~ instance.
+
+I'll skip most of the implementation review, even if the code may be
+interesting. Most of it however is just implementation detail that is not very
+relevant outside the text search tools. If you are interesting you can skim
+through the ~search_stream~ module code.
+
+** The grep crate
+
+The ~grep~ crate provides all you need to regex search into a line. It builds on
+top of the [[https://doc.rust-lang.org/regex/regex/index.html][Rust regex]] crate, and adds some optimizations in the ~literal~
+module. The result of a search is a ~Match~ instance, which is simply a position
+inside that buffer:
+
+#+BEGIN_SRC rust
+  #[derive(Clone, Debug, Default, Eq, PartialEq)]
+  pub struct Match {
+      start: usize,
+      end: usize,
+  }
+#+END_SRC
+
+The ~Grep~ type is cloneable. This is important, since it can be built once
+(which is an expensive operation) and then cloned to all the worker threads:
+
+#+BEGIN_SRC rust
+  #[derive(Clone, Debug)]
+  pub struct Grep {
+      re: Regex,
+      required: Option<Regex>,
+      opts: Options,
+  }
+#+END_SRC
+
+I won't dig into the implementation details, since they are already very well
+covered in the already mentioned [[http://blog.burntsushi.net/ripgrep/][Andrew's blog post]].
+
+* Output handling
