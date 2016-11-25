@@ -1,7 +1,8 @@
 #+TITLE: ripgrep code review
+# to get rid of the '_' subscript problem
+#+OPTIONS: ^:{}
 
 * Introduction
-
 I've been playing around with [[https://www.rust-lang.org][Rust]] for a year and a half, and as many other
 people already said, the best of it is the very welcoming and helpful community.
 There are a lot of online resources that help you to get started: the [[https://doc.rust-lang.org/book/][Rust book]],
@@ -45,7 +46,6 @@ checkout this specific version:
 and without further ado, let's get started.
 
 * The big picture
-
 Ripgrep is a command line tool for searching file contents using regular
 expressions, similarly to GNU grep. The tool is split across four crates: the
 main one, ~ignore~, ~grep~ and ~globset~.
@@ -68,7 +68,6 @@ a more generic, usable and clearer interface. Embrace the [[https://en.wikipedia
 principle]] and let it be your guide.
 
 * Main
-
 Everything starts from the ~ripgrep~ main function:
 
 #+BEGIN_SRC rust
@@ -279,11 +278,11 @@ workers will get the message at some point and then terminate. All the workers
 threads are then joined, waiting for completion.
 
 This is a good multi-threading pattern to follow:
-- a ~deque~ in between a producer (that doesn't have to do intensive jobs) and a
++ a ~deque~ in between a producer (that doesn't have to do intensive jobs) and a
   bunch of consumers (that do the heavy lifting) in separate threads;
-- the ~deque~ carries an enumeration of the things to do, and one of them is the
++ the ~deque~ carries an enumeration of the things to do, and one of them is the
   ~Quit~ action;
-- the producer will eventually push a bunch of ~Quit~ messages to terminate the
++ the producer will eventually push a bunch of ~Quit~ messages to terminate the
   worker threads.
 
 In case you just have one type of job, it makes perfect sense to use an
@@ -342,7 +341,6 @@ is also used by ~MultiWorker~. The files to search are iterated by
 The use of ~Worker~ across these two cases allows code reuse at a great extent.
 
 * The file listing
-
 We are now going to look over the file listing functional block.
 
 The default operation mode of ~ripgrep~ is to search recursively for non-binary,
@@ -408,7 +406,6 @@ the burden to implement error types to a minimum. A good reference on the error
 handling topic is present in [[https://doc.rust-lang.org/stable/book/error-handling.html][the Rust book]].
 
 ** Ignore patterns
-
 Ignore patterns are handled within the ~ignore~ crate by the ~Ignore~ struct.
 This type connects directory traversal with ignore semantics. In practice it
 builds a tree-like structure that mimics the directories structure, in which
@@ -418,7 +415,7 @@ let's have a brief look at it:
 #+BEGIN_SRC rust
   #[derive(Clone, Debug)]
   pub struct Ignore(Arc<IgnoreInner>);
-  
+
   #[derive(Clone, Debug)]
   struct IgnoreInner {
       compiled: Arc<RwLock<HashMap<OsString, Ignore>>>,
@@ -453,10 +450,10 @@ a mouthful:
 
 but this is the cache of ~Ignore~ instances that is shared among all of them.
 Let's try to break it down:
-- the ~HashMap~ maps paths to ~Ignore~ instances (as expected);
-- the ~RwLock~ allows the map to be shared and modified across different
++ the ~HashMap~ maps paths to ~Ignore~ instances (as expected);
++ the ~RwLock~ allows the map to be shared and modified across different
   threads, without causing data races;
-- and finally the ~Arc~ allow the cache to be owned safely by different threads.
++ and finally the ~Arc~ allow the cache to be owned safely by different threads.
 
 every time a new ~Ignore~ instance has to be built and added to a tree, the
 implementation first looks in the cache, trying to reuse the existing instances.
@@ -477,7 +474,6 @@ collect them all while working and do it's best, but then it can also return a
 (maybe partial) result. I found this approach very interesting.
 
 * The search process
-
 In this section we will look at how the regex search inside a file is
 implemented. This process involves some modules in ~ripgrep~ and also the ~grep~
 crate.
@@ -586,7 +582,6 @@ relevant outside the text search tools. If you are interesting you can skim
 through the ~search_stream~ module code.
 
 ** The grep crate
-
 The ~grep~ crate provides all you need to regex search into a line. It builds on
 top of the [[https://doc.rust-lang.org/regex/regex/index.html][Rust regex]] crate, and adds some optimizations in the ~literal~
 module. The result of a search is a ~Match~ instance, which is simply a position
@@ -616,3 +611,211 @@ I won't dig into the implementation details, since they are already very well
 covered in the already mentioned [[http://blog.burntsushi.net/ripgrep/][Andrew's blog post]].
 
 * Output handling
+The last bit we are going to investigate now is the output handling. The
+challenge here is that ~ripgrep~ needs to write from multiple threads to a
+single console, without interleaving the results.
+
+The ~Searcher~ refers to a ~Printer~ struct to print the results, whenever a
+match is found (and the output is enabled). The ~Printer~ is defined in the
+~printer~ module and it encapsulates the output logic in general. It knows how
+to print a match, given some options and forwards the writes to an inner
+~Terminal~ type.
+
+#+CAPTION: ~printer.rs:15~
+#+BEGIN_SRC rust
+  pub struct Printer<W> {
+      wtr: W,
+      has_printed: bool,
+      column: bool,
+      context_separator: Vec<u8>,
+      eol: u8,
+      file_separator: Option<Vec<u8>>,
+      heading: bool,
+      line_per_match: bool,
+      null: bool,
+      replace: Option<Vec<u8>>,
+      with_filename: bool,
+      color_choice: ColorChoice
+  }
+#+END_SRC
+
+Note that I took out the comments to make it shorter. As you can see, there is a
+generic writer ~W~ that is taken by value and a lot of other options. This
+generic parameter is expected to implement [[https://docs.rs/term/0.4.4/term/trait.Terminal.html][~term::Terminal~]] and ~Send~:
+
+#+CAPTION: ~printer.rs:73~
+#+BEGIN_SRC rust
+  impl<W: Terminal + Send> Printer<W> {
+      // printer implementation
+  }
+#+END_SRC
+
+The struct uses the builder pattern again, but with a slightly different flavor.
+The ~new~ method takes only a ~Terminal~ and sets all the options with a default
+value. To change them, the user needs to call the various builder methods,
+directly on the ~Printer~ itself, not on another builder helper. For example:
+
+#+BEGIN_SRC rust
+  pub fn heading(mut self, yes: bool) -> Printer<W> {
+      self.heading = yes;
+      self
+  }
+#+END_SRC
+
+takes ~self~ by mutable value and, after changing the ~heading~ option, returns
+~self~ by value again.
+
+The implementation is simple. The public interface provides some methods to
+print the various match components, like the path, the context separator and
+the line contents. Everything is clear except the ~Send~ detail. The only thing
+that is still not clear to me is why the ~Send~ trait is also needed, since I
+don't see any threading in the struct implementation and all the print methods
+require a mutable ~self~, e.g.:
+
+#+CAPTION: ~printer.rs:207~
+#+BEGIN_SRC rust
+  pub fn context_separate(&mut self) {
+      // N.B. We can't use `write` here because of borrowing restrictions.
+      if self.context_separator.is_empty() {
+          return;
+      }
+      self.has_printed = true;
+      let _ = self.wtr.write_all(&self.context_separator);
+      let _ = self.wtr.write_all(&[self.eol]);
+  }
+#+END_SRC
+
+In any case, the implementation is more or less straight forward, and in the end
+all the writes are directed to the inner ~Terminal~.
+
+In the Linux case, the ~Terminal~ is the default one provided by the ~term~
+crate itself: [[https://docs.rs/term/0.4.4/term/terminfo/struct.TerminfoTerminal.html][~TerminfoTerminal~]]. On Windows ~ripgrep~ provides a custom
+implementation, since coloring needs a special treatment, to avoid performance
+hurt:
+
+#+CAPTION: ~terminal_win.rs:5~
+#+BEGIN_SRC text
+  This particular implementation is a bit idiosyncratic, and the "in-memory"
+  specification is to blame. In particular, on Windows, coloring requires
+  communicating with the console synchronously as data is written to stdout.
+  This is anathema to how ripgrep fundamentally works: by writing search results
+  to intermediate thread local buffers in order to maximize parallelism.
+
+  Eliminating parallelism on Windows isn't an option, because that would negate
+  a tremendous performance benefit just for coloring.
+
+  We've worked around this by providing an implementation of `term::Terminal`
+  that records precisely where a color or a reset should be invoked, according
+  to a byte offset in the in memory buffer. When the buffer is actually printed,
+  we copy the bytes from the buffer to stdout incrementally while invoking the
+  corresponding console APIs for coloring at the right location.
+#+END_SRC
+
+The implementation is provided by ~WindowsBuffer~:
+
+#+CAPTION: ~terminal_win.rs:33~
+#+BEGIN_SRC rust
+  /// An in-memory buffer that provides Windows console coloring.
+  #[derive(Clone, Debug)]
+  pub struct WindowsBuffer {
+      buf: Vec<u8>,
+      pos: usize,
+      colors: Vec<WindowsColor>,
+  }
+
+  /// A color associated with a particular location in a buffer.
+  #[derive(Clone, Debug)]
+  struct WindowsColor {
+      pos: usize,
+      opt: WindowsOption,
+  }
+
+  /// A color or reset directive that can be translated into an instruction to
+  /// the Windows console.
+  #[derive(Clone, Debug)]
+  enum WindowsOption {
+      Foreground(Color),
+      Background(Color),
+      Reset,
+  }
+#+END_SRC
+
+This struct implements ~terminfo::Terminal~ as we said before, and it contains a
+buffer of characters to print, a position on the buffer itself, and a vector of
+colors plus positions. Whenever something has to be print, and the write is
+called, the output is buffered in ~self.buf~:
+
+#+CAPTION: ~terminal_win.rs:107~
+#+BEGIN_SRC rust
+  impl io::Write for WindowsBuffer {
+      fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+          let n = try!(self.buf.write(buf));
+          self.pos += n;
+          Ok(n)
+      }
+
+      fn flush(&mut self) -> io::Result<()> {
+          Ok(())
+      }
+  }
+#+END_SRC
+
+and whenever a coloring option is passed, it is pushed into the ~colors~ vector,
+along with the current position:
+
+#+CAPTION: ~terminal_win.rs:119~
+#+BEGIN_SRC rust
+  impl Terminal for WindowsBuffer {
+      type Output = Vec<u8>;
+
+      fn fg(&mut self, fg: Color) -> term::Result<()> {
+          self.push(WindowsOption::Foreground(fg));
+          Ok(())
+      }
+      // ...
+  }
+#+END_SRC
+
+Then, when the higher level logic decides it's time to print everything, the
+~print_stdout~ is called, passing another terminal (the real one, linked with
+the console):
+
+#+CAPTION: ~terminal_win.rs:72~
+#+BEGIN_SRC rust
+  /// Print the contents to the given terminal.
+  pub fn print_stdout<T: Terminal + Send>(&self, tt: &mut T) {
+      if !tt.supports_color() {
+          let _ = tt.write_all(&self.buf);
+          let _ = tt.flush();
+          return;
+      }
+      let mut last = 0;
+      for col in &self.colors {
+          let _ = tt.write_all(&self.buf[last..col.pos]);
+          match col.opt {
+              WindowsOption::Foreground(c) => {
+                  let _ = tt.fg(c);
+              }
+              WindowsOption::Background(c) => {
+                  let _ = tt.bg(c);
+              }
+              WindowsOption::Reset => {
+                  let _ = tt.reset();
+              }
+          }
+          last = col.pos;
+      }
+      let _ = tt.write_all(&self.buf[last..]);
+      let _ = tt.flush();
+  }
+#+END_SRC
+
+Here, if the terminal does not support coloring, there is nothing special to do,
+and all the buffer contents are written. Otherwise, for every color option, the
+buffer contents before that location is written, the option applied, and so on,
+until the end of the buffer.
+
+*** TODO ColoredTerminal
+*** TODO Out
+
+* Conclusion
