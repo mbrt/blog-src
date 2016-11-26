@@ -2,6 +2,11 @@
 # to get rid of the '_' subscript problem
 #+OPTIONS: ^:{}
 
+*** DONE the search buffer
+    CLOSED: [2016-11-27 dom 00:01]
+*** TODO ColoredTerminal
+*** TODO Out
+
 * Introduction
 I've been playing around with [[https://www.rust-lang.org][Rust]] for a year and a half, and as many other
 people already said, the best of it is the very welcoming and helpful community.
@@ -581,7 +586,42 @@ interesting. Most of it however is just implementation detail that is not very
 relevant outside the text search tools. If you are interesting you can skim
 through the ~search_stream~ module code.
 
+The ~search_mmap~ function, instead, creates a ~BufferSearcher~, defined in the
+~search_buffer~ module, and calls run on it, like in the ~Searcher~ case:
+
+#+CAPTION: ~search_buffer.rs:98~
+#+BEGIN_SRC rust
+  impl<'a, W: Send + Terminal> BufferSearcher<'a, W> {
+      pub fn run(mut self) -> u64;
+  }
+#+END_SRC
+
+The same reasoning applies here: the struct is created and used only once for
+one file, because the ~run~ function takes ~self~ by value. The purpose of the
+~search_buffer~ module is to search inside a file, entirely contained in a
+single buffer, instead of a stream. This buffer is provided by a memory mapped
+file, and it's used only when a stream would be slower (generally this happens
+when searching into a single huge file). This module reuses some types provided
+by the ~search_stream~ module:
+
+#+CAPTION: ~search_buffer.rs:16~
+#+BEGIN_SRC rust
+  use search_stream::{IterLines, Options, count_lines, is_binary};
+#+END_SRC
+
+It notably does not use the ~InputBuffer~, since there is nothing to buffer
+here, everything is already available in the input buffer. The implementation is
+very basic, and it doesn't support some of the features the other module does
+(like showing context lines).
+
+No big surprise here. The only minor weak point for me is that this module
+depends on the ~search_stream~ module. It doesn't actually build on top of it,
+but it just imports some functionality. I'd rather try to move the common
+implementation in another module from which they can both import. This makes
+sense, since the common stuff is indeed not specific to either of the modules.
+
 ** The grep crate
+
 The ~grep~ crate provides all you need to regex search into a line. It builds on
 top of the [[https://doc.rust-lang.org/regex/regex/index.html][Rust regex]] crate, and adds some optimizations in the ~literal~
 module. The result of a search is a ~Match~ instance, which is simply a position
@@ -639,7 +679,7 @@ to print a match, given some options and forwards the writes to an inner
   }
 #+END_SRC
 
-Note that I took out the comments to make it shorter. As you can see, there is a
+Note that I took the comments out to make it shorter. As you can see, there is a
 generic writer ~W~ that is taken by value and a lot of other options. This
 generic parameter is expected to implement [[https://docs.rs/term/0.4.4/term/trait.Terminal.html][~term::Terminal~]] and ~Send~:
 
@@ -812,10 +852,49 @@ the console):
 
 Here, if the terminal does not support coloring, there is nothing special to do,
 and all the buffer contents are written. Otherwise, for every color option, the
-buffer contents before that location is written, the option applied, and so on,
-until the end of the buffer.
+buffer contents before that location is written and the option applied. This is
+repeated until the end of the buffer.
 
-*** TODO ColoredTerminal
-*** TODO Out
+The actual terminal is then wrapped inside a ~ColoredTerminal~ instance:
+
+#+CAPTION: ~out.rs:111~
+#+BEGIN_SRC rust
+  #[derive(Clone, Debug)]
+  pub enum ColoredTerminal<T: Terminal + Send> {
+      Colored(T),
+      NoColor(T::Output),
+  }
+#+END_SRC
+
+The purpose of this type is simple: determine if the current terminal supports
+coloring, and if so use it. If not, just drop the terminal and use its internal
+writer type. The color support is a costly operation, and so it's done only
+once, and the result is cached in a static variable:
+
+#+CAPTION: ~out.rs:123~
+#+BEGIN_SRC rust
+  lazy_static! {
+      // Only pay for parsing the terminfo once.
+      static ref TERMINFO: Option<TermInfo> = {
+          match TermInfo::from_env() {
+              Ok(info) => Some(info),
+              Err(err) => {
+                  debug!("error loading terminfo for coloring: {}", err);
+                  None
+              }
+          }
+      };
+  }
+#+END_SRC
+
+The type then implements some specialized constructors for a bunch of types:
++ ~WindowsBuffer~;
++ ~WinConsole<io::Stdout>~;
++ and the one for the generic writer ~W: io::Write + Send~.
+
+If the terminal then supports coloring, the ~Colored(T)~ (where ~T~ is
+~T: Terminal + Send~ enum value is used, so the ~ColoredTerminal~ instance
+contains a ~Terminal~. Otherwise, the ~NoColor(T::Output)~ value is selected,
+that contains only a plain ~io::Write~.
 
 * Conclusion
