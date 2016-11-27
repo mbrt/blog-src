@@ -3,28 +3,32 @@
 #+OPTIONS: ^:{}
 
 * Introduction
-I've been playing around with [[https://www.rust-lang.org][Rust]] for a year and a half, and as many other
-people already said, the best of it is the very welcoming and helpful community.
-There are a lot of online resources that help you to get started: the [[https://doc.rust-lang.org/book/][Rust book]],
-the [[https://doc.rust-lang.org/nomicon/][Rustonomicon]] and many blog posts and stack overflow questions. After I
-learned the basics I felt a bit lost though, since not many advanced resources
-are available. As a C++ developer I miss indeed books like [[http://www.aristeia.com/books.html][Effective C++]] from
-Scott Meyers, and people like [[https://herbsutter.com/][Herb Sutter]] that provide a lot of insights besides
-the basics. They teach you how to get the best from the language, how to use it
-properly, and how to structure your code to be more clear and effective. Those
-resources are not completely absent in the Rust community, but neither common.
+I've been playing around with [[https://www.rust-lang.org][Rust]] for a year and a half, and the best part of
+it, like many others say, has been the very helpful community. There are a lot
+of online resources that help you to get started: the [[https://doc.rust-lang.org/book/][Rust book]], the
+[[https://doc.rust-lang.org/nomicon/][Rustonomicon]] and many [[https://this-week-in-rust.org/][blog posts]] and [[http://stackoverflow.com/questions/tagged/rust][stack overflow questions]]. After I learned
+the basics I felt a bit lost though. I couldn't find enough resources for my
+"intermediate level". I'm a C++ developer in my daily job, and I miss books like
+[[http://www.aristeia.com/books.html][Effective C++]] from Scott Meyers, the [[https://herbsutter.com/][Herb Sutter's blog]] and a lot of online
+resources that help you with the advanced C++ topics (that are a lot... sigh).
+They teach you how to get the best from the language, how to use it properly,
+and how to structure your code to be more clear and effective. Those resources
+are not completely absent in the Rust community, but neither common.
 
-How do you learn those things then? You look at how the best developers work. I
-think code reviews are incredibly useful; you can see how other people reason
-about problems you also struggled with, and how they have solved them. This post
-attempts to target a more navigated audience, by looking at the [[https://github.com/BurntSushi/ripgrep][ripgrep]] crate by
-Andrew Gallant, which is a great example of good Rust, in my opinion.
+How do you learn those things then? Well, there are two ways in my opinion: you
+spend a lot of time learning by doing, or you look at some good code. I think
+code reviews are incredibly useful; you can see how other people reason about
+problems you also struggled with, and how they have solved them. This post
+attempts to target the "intermediate level" Rust developers (like me), by
+looking at the [[https://github.com/BurntSushi/ripgrep][ripgrep]] crate by Andrew Gallant. A great example of good Rust, in
+my opinion.
 
 I'm not going to explain everything about the crate, since there is already a
 very good [[http://blog.burntsushi.net/ripgrep/][blog post]] by Andrew himself, explaining how the application works from
-a functional perspective. We are going instead to walk through the crate
-architecture. I'm going to take for granted some of the basics, so if you need a
-refresher you can take a look at the resources I mentioned before.
+a functional perspective, and some used algorithms. We are going instead to walk
+through the crate architecture. I'm going to take for granted some of the
+basics, so if you need a refresher you can take a look at the resources I
+mentioned before.
 
 We are going to look at this specific version of the crate:
 
@@ -33,9 +37,9 @@ We are going to look at this specific version of the crate:
   0.2.5-4-gf728708
 #+END_EXAMPLE
 
-which is the last one at the time of writing. By the time you are reading the
-code might have evolved, so if you want to follow the code live, it's better to
-checkout this specific version:
+which is the last one at the time of writing. By the time you are reading this,
+however, the crate might have evolved, so if you want to follow the code live,
+you should checkout this specific version:
 
 #+BEGIN_EXAMPLE
   $ git clone https://github.com/BurntSushi/ripgrep.git
@@ -46,9 +50,9 @@ checkout this specific version:
 and without further ado, let's get started.
 
 * The big picture
-Ripgrep is a command line tool for searching file contents using regular
+~ripgrep~ is a command line tool for searching file contents using regular
 expressions, similarly to GNU grep. The tool is split across four crates: the
-main one, ~ignore~, ~grep~ and ~globset~.
+main one (~ripgrep~), ~ignore~, ~grep~ and ~globset~.
 
 [[file:crates.svg]]
 
@@ -62,14 +66,16 @@ multi-threading.
 
 One clear advantage of splitting an application in multiple crates is that it
 forces you to keep your code scoped. It's easy to create a mess of dependencies
-among the components if everything is in the same crate. If you instead take a
-part of your application and try to give it a meaning by itself, you end up with
-a more generic, usable and clearer interface. Embrace the [[https://en.wikipedia.org/wiki/Single_responsibility_principle][Single responsibility
-principle]] and let it be your guide.
+among the components if everything is in the same crate (or, even worse, in the
+same module). If you instead take a part of your application and try to give it
+a meaning by itself, you'll end up with a more generic, usable and clearer
+interface. Embrace the [[https://en.wikipedia.org/wiki/Single_responsibility_principle][Single responsibility principle]] and let it be your guide.
+This approach is clearly visible in ~ripgrep~.
 
 * Main
 Everything starts from the ~ripgrep~ main function:
 
+#+CAPTION: ~main.rs:74~
 #+BEGIN_SRC rust
   fn main() {
       match Args::parse().and_then(run) {
@@ -83,13 +89,14 @@ Everything starts from the ~ripgrep~ main function:
   }
 #+END_SRC
 
-It is very concise: it parses the command line arguments and then passes them to
-the ~run~ function. In between them there is the [[https://doc.rust-lang.org/std/result/enum.Result.html#method.and_then][Result::and_then]] combinator, so
-the ~match~ statement gets to the ~Ok~ branch only if both operations did not
-fail, otherwise it selects the ~Err~ branch, handling errors for both the first
-and the second operation. Then the main exit code depends on whether there have
-been matches or not.
+It is very concise: it parses the command line arguments and then pass them to
+the ~run~ function. In between there is the [[https://doc.rust-lang.org/std/result/enum.Result.html#method.and_then][Result::and_then]] combinator, so the
+~match~ statement gets to the ~Ok~ branch only if both operations succeed. If
+not, it selects the ~Err~ branch, handling errors for both the first and the
+second operation. Then the exit code depends on whether there have been matches
+or not.
 
+#+CAPTION: ~main.rs:85~
 #+BEGIN_SRC rust
   fn run(args: Args) -> Result<u64> {
       // ...
@@ -104,9 +111,10 @@ if so, this is the way it setups the things:
 The main thread, controlled by the ~run~ function digs files from the
 filesystem, and pushes them into a [[https://crates.io/crates/deque][deque]]. This is a Single-producer /
 Multiple-consumers queue, from which multiple worker threads can pull at the
-same time, and perform the search operations. Here is the workers initialization
-in the ~run~ function:
+same time. They will in turn perform the search operations. Here is the workers
+initialization in the ~run~ function:
 
+#+CAPTION: ~main.rs:116~
 #+BEGIN_SRC rust
   let workq = {
       let (workq, stealer) = deque::new();
@@ -122,12 +130,12 @@ in the ~run~ function:
 #+END_SRC
 
 As you can see, the ~deque::new()~ returns two objects. The queue is indeed
-composed by two ends. One is the ~workq~ from which the main thread can push,
-and the other end is the ~stealer~, from which all the workers can pull. In
-every iteration of the loop a new worker is created and moved to a new thread,
-along with a ~stealer~. Note that the ~stealer~ is [[https://doc.rust-lang.org/std/clone/trait.Clone.html][cloneable]], but this doesn't
-mean that the queue itself is cloned. Internally indeed the ~stealer~ contains
-an [[https://doc.rust-lang.org/std/sync/struct.Arc.html][Arc]] to the queue:
+composed by two ends: one is the ~workq~ from which the main thread can push,
+and the other end is the ~stealer~, from which all the workers can pull. Every
+iteration of the loop creates a new worker and move it to a new thread, along
+with a ~stealer~. Note that the ~stealer~ is [[https://doc.rust-lang.org/std/clone/trait.Clone.html][cloneable]], but this doesn't mean
+that the queue itself is cloned. Internally indeed the ~stealer~ contains an [[https://doc.rust-lang.org/std/sync/struct.Arc.html][Arc]]
+to the queue:
 
 #+BEGIN_SRC rust
   pub struct Stealer<T: Send> {
@@ -139,20 +147,23 @@ To note here is the beauty of the ~deque~ interface. To express the fact that
 the producer is only one, but the consumers can be multiple, the type is split
 in two: the producer is then [[https://doc.rust-lang.org/std/marker/trait.Send.html][Send]] but not [[https://doc.rust-lang.org/std/marker/trait.Sync.html][Sync]], nor [[https://doc.rust-lang.org/std/clone/trait.Clone.html][Clone]]. There is no way to
 use it from multiple threads, since you can yield the instance to another
-thread, but you can't keep another reference to it. The ~Stealer~, which is the
-other end, is instead both ~Send~ and ~Clone~. You can then pass them around by
-cloning and sending them off to other threads. They will all refer to the same
-queue. There is no way to use this interface incorrectly.
+thread, but in that case you can't keep another reference to it. The ~Stealer~,
+which is the other end, is instead both ~Send~ and ~Clone~. You can then pass
+them around by cloning and sending them off to other threads. They can all be
+used as they refer to the same queue. There is no way to use this interface
+incorrectly.
 
-Another thing to note here is that the result of the block is just the producer
-part of the ~deque~. The worker threads are pushed into a vector. The workers
-along with their stealers are moved into the threads. The use of a block that
-just returns what is needed for the rest of the function is a good practice. In
-this way the ~run~ function is not polluted with variables that are not usable
-anymore because their values have been moved.
+Another thing to note here is that the ~workq~ variable is initialized by a
+block, that returns just the producer part of a new ~deque~. Inside the block,
+the workers along with their stealers are moved into new worker threads and
+those are in turn pushed into a vector. Using a block that just returns what
+it's needed for the rest of the function is a good practice. In this way the
+~run~ function is not polluted with variables that are not usable anymore
+because their values have been moved.
 
 This is the ~MultiWorker~ struct, that runs in a separate thread:
 
+#+CAPTION: ~main.rs:236~
 #+BEGIN_SRC rust
   struct MultiWorker {
       chan_work: Stealer<Work>,
@@ -166,9 +177,10 @@ This is the ~MultiWorker~ struct, that runs in a separate thread:
   }
 #+END_SRC
 
-the first field is the stealer. As you can see from its type, the items it
-contains are ~Work~ structs:
+the first field is the stealer. As you can see from its type, the stealer
+receives ~Work~ structs:
 
+#+CAPTION: ~main.rs:225~
 #+BEGIN_SRC rust
   enum Work {
       Stdin,
@@ -179,6 +191,7 @@ contains are ~Work~ structs:
 
 The main thread will push them from its ~workq~ variable:
 
+#+CAPTION: ~main.rs:136~
 #+BEGIN_SRC rust
   for dent in args.walker() {
       if quiet_matched.has_match() {
@@ -193,13 +206,14 @@ The main thread will push them from its ~workq~ variable:
   }
 #+END_SRC
 
-The ~args.walker()~ is an iterator over the files to search, or standard input
-if the ~-~ argument is passed. In the former case it pushes a ~Work::File~ entry
-with the path, in the latter it pushes a ~Work::Stdin~ entry.
+The ~args.walker()~ is an iterator over the files to search, or the standard
+input stream, if the ~-~ argument is passed. In the former case it pushes a
+~Work::File~ entry with the path, in the latter a ~Work::Stdin~ entry.
 
-The ~MultiWorker::run~ function is a loop that pops from the ~deque~ entries to
-process one by one:
+The ~MultiWorker::run~ function is a loop that pops items from the ~deque~ and
+process them one by one:
 
+#+CAPTION: ~main.rs:256~
 #+BEGIN_SRC rust
   loop {
       if self.quiet_matched.has_match() {
@@ -238,20 +252,22 @@ instance:
   }
 #+END_SRC
 
-The outcome is matched against the different possibilities, and only
-~Stolen::Data~ contains a ~Work~ entry. Both ~Stdin~ and ~File~ are then
-translated into a ~WorkReady~ instance. In the second case the file is then
+The outcome is matched against the different possibilities, but only
+~Stolen::Data~ contains a ~Work~ entry. Both ~Stdin~ and ~File~ entry types are
+then translated into a ~WorkReady~ instance. In the second case the file is then
 opened with an ~std::fs::File~. The ~work~ variable is later consumed by a
 ~Worker~ instance:
 
+#+CAPTION: ~main.rs:277~
 #+BEGIN_SRC rust
   self.worker.do_work(&mut printer, work);
 #+END_SRC
 
-We'll get back to that afterwords, but let's first backtrack to the
+We'll get back to that in a moment, but let's first backtrack to the
 ~MultiWorker::run~ loop. The ~Work::Quit~ case breaks it, so the thread
 terminates:
 
+#+CAPTION: ~main.rs:262~
 #+BEGIN_SRC rust
   let work = match self.chan_work.steal() {
       // ...
@@ -261,6 +277,7 @@ terminates:
 
 This value is pushed by the main thread when all the files have been examined:
 
+#+CAPTION: ~main.rs:152~
 #+BEGIN_SRC rust
   for _ in 0..workers.len() {
       workq.push(Work::Quit);
@@ -271,29 +288,42 @@ This value is pushed by the main thread when all the files have been examined:
   }
 #+END_SRC
 
-The threads are all guaranteed to terminate, because the number of pushed ~Quit~
-messages is the same as the number of workers. A worker can only consume one of
-them and then quit. This implies that, since no messages can be lost, all the
-workers will get the message at some point and then terminate. All the workers
-threads are then joined, waiting for completion.
+The threads are all guaranteed to terminate because the number of ~Quit~
+messages pushed is the same as the number of workers. A worker can only consume
+one of them and then quit. This implies that, since no messages can be lost, all
+the workers will get the message at some point and then terminate. All the
+workers threads are then joined, waiting for completion.
 
 This is a good multi-threading pattern to follow:
-+ a ~deque~ in between a producer (that doesn't have to do intensive jobs) and a
-  bunch of consumers (that do the heavy lifting) in separate threads;
++ a ~deque~ in between a producer (that provides the workloads) and a bunch of
+  consumers (that do the heavy lifting) in separate threads;
 + the ~deque~ carries an enumeration of the things to do, and one of them is the
   ~Quit~ action;
 + the producer will eventually push a bunch of ~Quit~ messages to terminate the
-  worker threads.
+  worker threads (one per thread).
 
 In case you just have one type of job, it makes perfect sense to use an
-~Option<Stuff>~ as work item. The workers will terminate in case ~None~ is
-passed. The ~Option~ can be used also in the ~ripgrep~ case, replacing the
-~Quit~ message but I'm not sure the code would be more readable.
+~Option<Stuff>~ as work item, instead of an enumeration. The workers will have
+to terminate in case ~None~ is passed. The ~Option~ can be used also in the
+~ripgrep~ case, replacing the ~Quit~ message but I'm not sure the code would be
+more readable:
+
+#+BEGIN_SRC rust
+  let work = match self.chan_work.steal() {
+      Stolen::Empty | Stolen::Abort => continue,
+      Stolen::Data(None) => break,
+      Stolen::Data(Some(Work::Stdin)) => WorkReady::Stdin,
+      Stolen::Data(Some(Work::File(ent)) => {
+          // ...
+      }
+  };
+#+END_SRC
 
 This was the multi-threading operational mode. ~ripgrep~ can however operate in
 a single thread, in case there is only one file to search or only one core to
 use, or the user says so. The ~run~ function checks that:
 
+#+CAPTION: ~main.rs:100~
 #+BEGIN_SRC rust
   let threads = cmp::max(1, args.threads() - 1);
   let isone =
@@ -307,6 +337,7 @@ use, or the user says so. The ~run~ function checks that:
 and calls the ~run_one_thread~ function for the single-threaded case (I have
 removed some uninteresting details):
 
+#+CAPTION: ~main.rs:162~
 #+BEGIN_SRC rust
   fn run_one_thread(args: Arc<Args>) -> Result<u64> {
       let mut worker = Worker {
@@ -335,10 +366,10 @@ removed some uninteresting details):
   }
 #+END_SRC
 
-As you can see, the function uses a single ~Worker~. If you remember, this struct
-is also used by ~MultiWorker~. The files to search are iterated by
+As you can see, the function uses a single ~Worker~. If you remember, this
+struct is also used by ~MultiWorker~. The files to search are iterated by
 ~args.walker()~ as before, and each entry is passed to the ~worker~, as before.
-The use of ~Worker~ across these two cases allows code reuse at a great extent.
+The use of ~Worker~ in both cases allows code reuse to a great extent.
 
 * The file listing
 We are now going to look over the file listing functional block.
@@ -441,8 +472,8 @@ counter to the actual data (i.e. ~IgnoreInner~). A first interesting field
 inside that struct is ~parent~, that is an ~Option<Ignore>~, so it points to a
 parent if it is present. This is how the tree structure is implemented. Since
 the ~Arc~ can be shared, multiple ~Ignore~ can share the same parent. But that
-is not all; they can be also cached. The ~compiled~ field's type is too much of
-a mouthful:
+is not all; they can be also cached. The ~compiled~ field's type is a bit of a
+mouthful:
 
 #+BEGIN_SRC rust
   Arc<RwLock<HashMap<OsString, Ignore>>>
