@@ -379,38 +379,42 @@ non-ignored files starting from the current directory (or from the given paths).
 To enumerate the files and feed the search engine, ~ripgrep~ uses the ~ignore~
 crate.
 
-But let's start from the beginning. The ~walker~ function provided by ~Args~
-returns a ~Walk~ struct:
+But let's start from the beginning. The ~walker~ function provided by ~Args~ and
+used by the ~run~ function in ~main~, returns a ~Walk~ struct:
 
+#+CAPTION: ~args.rs:725~
 #+BEGIN_SRC rust
   pub fn walker(&self) -> Walk;
 #+END_SRC
 
 ~Walk~ is just a simple wrapper around the ~ignore::Walk~ struct. A value of
-this struct can be created by using the ~new~ method:
+this struct can be created by using its ~new~ method:
 
+#+CAPTION: ~walk.rs:261~
 #+BEGIN_SRC rust
   pub fn new<P: AsRef<Path>>(path: P) -> Walk;
 #+END_SRC
 
 or with a ~WalkBuilder~, that implements the [[https://doc.rust-lang.org/book/method-syntax.html#builder-pattern][builder pattern]]. This allows to
-customize the behavior without annoying the user, forcing them to provide a lot
-of parameters to the constructor:
+customize the behavior without annoying the user, and not to force them to
+provide a lot of parameters to the constructor:
 
 #+BEGIN_SRC rust
   let w = WalkBuilder::new(path).ignore(true).max_depth(Some(5)).build();
 #+END_SRC
 
-In this example we have specified only two parameters; all the others will be
-defaulted.
+In this example we have created a ~WalkBuilder~ with default arguments and just
+override the ~ignore~ and ~max_depth~ options.
 
 The implementation of the type is not very interesting from our point of view.
 It is basically an ~Iterator~ that walks through the filesystem by using the
 ~walkdir~ crate, but ignores the files and directories listed in ~.gitignore~
-and ~.ignore~ files possibly present, with the help of the ~Ignore~ type. We
-will look at that type a bit later. Let's look at the ~Error~ type first:
+and ~.ignore~ files possibly present, with the help of the ~Ignore~ type. We'll
+look at that type a bit later. Let's look at the ~Error~ type first:
 
+#+CAPTION: ~ignore/src/lib.rs:74~
 #+BEGIN_SRC rust
+  /// Represents an error that can occur when parsing a gitignore file.
   #[derive(Debug)]
   pub enum Error {
       Partial(Vec<Error>),
@@ -424,25 +428,26 @@ will look at that type a bit later. Let's look at the ~Error~ type first:
 #+END_SRC
 
 This error type has an interesting recursive definition. The ~Partial~ case of
-the enumeration contains a vector of ~Error~s, for example. ~WithLineNumber~
-adds line information to an ~Error~. In this case ~Box<Error>~, since a
-recursive type cannot embed itself, otherwise it would be impossible to compute
-the size of the type.
+the enumeration contains a vector of ~Error~ instances, for example.
+~WithLineNumber~ adds line information to an ~Error~. In this case ~Box<Error>~,
+since a recursive type cannot embed itself, otherwise it would be impossible to
+compute the size of the type.
 
 Then the [[https://doc.rust-lang.org/std/error/trait.Error.html][error::Error]], [[https://doc.rust-lang.org/std/fmt/trait.Display.html][fmt::Display]] and [[https://doc.rust-lang.org/std/convert/trait.From.html][From<io::Error>]] traits are implemented,
 to make it a proper error type and to easily construct it out an ~io::Error~.
-Here the boilerplate necessary to crank up the error type are handcrafted.
+Here, the boilerplate necessary to crank up the error type are handcrafted.
 Another possibility could have been to use the [[https://github.com/tailhook/quick-error][quick-error]] macro, which reduces
-the burden to implement error types to a minimum. A good reference on the error
-handling topic is present in [[https://doc.rust-lang.org/stable/book/error-handling.html][the Rust book]].
+the burden to implement error types to a minimum. You can find a good reference
+on the error handling topic in [[https://doc.rust-lang.org/stable/book/error-handling.html][the Rust book]].
 
 ** Ignore patterns
 Ignore patterns are handled within the ~ignore~ crate by the ~Ignore~ struct.
 This type connects directory traversal with ignore semantics. In practice it
 builds a tree-like structure that mimics the directories structure, in which
 leaves are new ignore contexts. The implementation is quite complicated, but
-let's have a brief look at it:
+let's give it a brief look:
 
+#+CAPTION: ~ignore/src/dir.rs:84~
 #+BEGIN_SRC rust
   #[derive(Clone, Debug)]
   pub struct Ignore(Arc<IgnoreInner>);
@@ -466,43 +471,44 @@ let's have a brief look at it:
   }
 #+END_SRC
 
-I have taken out the comments to make it short, but you can find them in
-~ignore/src/dir.rs~. The ~Ignore~ struct is a wrapper around an atomic reference
-counter to the actual data (i.e. ~IgnoreInner~). A first interesting field
-inside that struct is ~parent~, that is an ~Option<Ignore>~, so it points to a
-parent if it is present. This is how the tree structure is implemented. Since
-the ~Arc~ can be shared, multiple ~Ignore~ can share the same parent. But that
-is not all; they can be also cached. The ~compiled~ field's type is a bit of a
-mouthful:
+Please note that I have taken out the comments to make it shorter. The ~Ignore~
+struct is a wrapper around an atomic reference counter to the actual data
+(namely, the ~IgnoreInner~). A first interesting field inside that struct is
+~parent~, that is an ~Option<Ignore>~. It points to a parent entry if present.
+So, this is where the tree structure comes from: the ~Arc~ can be shared, so
+multiple ~Ignore~ can share the same parent. But that's not all; they can also
+be cached in the ~compiled~ field, that has a quite complex type:
 
 #+BEGIN_SRC rust
   Arc<RwLock<HashMap<OsString, Ignore>>>
 #+END_SRC
 
-but this is the cache of ~Ignore~ instances that is shared among all of them.
+This is the cache of ~Ignore~ instances that is shared among all of them.
 Let's try to break it down:
 + the ~HashMap~ maps paths to ~Ignore~ instances (as expected);
 + the ~RwLock~ allows the map to be shared and modified across different
   threads, without causing data races;
-+ and finally the ~Arc~ allow the cache to be owned safely by different threads.
++ and finally the ~Arc~ allow the cache to be owned safely by different owners
+  in different threads.
 
-every time a new ~Ignore~ instance has to be built and added to a tree, the
+Every time a new ~Ignore~ instance has to be built and added to a tree, the
 implementation first looks in the cache, trying to reuse the existing instances.
 The tree is built dynamically, while crawling the directories, looking for the
-specific ignore files (e.g. ~.gitignore~, ~.ignore~, ~.rgignore~) and support
-custom ignores.
+specific ignore files (e.g. ~.gitignore~, ~.ignore~, ~.rgignore~). Other ignore
+patterns can be manually added from the command line, and are also added to the tree.
 
-Another interesting bit is the ~add_parents~ signature for ~Ignore~:
+Another interesting bit here is the ~add_parents~ signature for ~Ignore~:
 
+#+CAPTION: ~ignore/src/dir.rs:149~
 #+BEGIN_SRC rust
   pub fn add_parents<P: AsRef<Path>>(&self, path: P) -> (Ignore, Option<Error>);
 #+END_SRC
 
-instead of returning a ~Result<Ignore, Error>~ it uses a pair, returning always
-a result and optionally an error. In this way partial failures are allowed. If
-you remember, the error can also be an array of errors, so the function can
-collect them all while working and do it's best, but then it can also return a
-(maybe partial) result. I found this approach very interesting.
+Instead of returning a ~Result<Ignore, Error>~, it returns a pair, that contains
+always a result and optionally an error. In this way partial failures are
+allowed. If you remember, the error can also be a vector of errors, so the
+function can collect them while working, but then it can also return a (maybe
+partial) result in the end. I found this approach very interesting.
 
 * The search process
 In this section we will look at how the regex search inside a file is
@@ -518,6 +524,7 @@ precisely, the kernel will take care of this illusion.
 
 The ~search~ function just creates a new ~Searcher~ and calls ~run~ on it.
 
+#+CAPTION: ~search_stream.rs:224~
 #+BEGIN_SRC rust
   impl<'a, R: io::Read, W: Terminal + Send> Searcher<'a, R, W> {
       pub fn run(mut self) -> Result<u64, Error>;
@@ -525,9 +532,10 @@ The ~search~ function just creates a new ~Searcher~ and calls ~run~ on it.
 #+END_SRC
 
 The first interesting thing to note here is that the ~run~ function actually
-consumes ~self~, so you can't actually run it twice with the same instance. Why
-is that? Let's have a look at the ~new~ method, that creates this struct:
+consumes ~self~, so you can't actually run the method twice. Why is that? Let's
+have a look at the ~new~ method, that creates this struct:
 
+#+CAPTION: ~search_stream.rs:135~
 #+BEGIN_SRC rust
   impl<'a, R: io::Read, W: Terminal + Send> Searcher<'a, R, W> {
       pub fn new(inp: &'a mut InputBuffer,
@@ -551,16 +559,15 @@ don't we just use a function then? The approach used here has several
 advantages:
 
 1. you get the behavior that the search cannot be run twice with the same file
-   (nothing that a free function could not do);
+   (but that's nothing that a free function could not do);
 2. you can split the function among different private functions, without passing
    around all the arguments; they will all take ~self~ by reference (maybe also
-   ~&mut self~) and just refer to the member variables.
+   ~&mut self~) and just use the member variables.
 
 So, instead of:
 
 #+BEGIN_SRC rust
-  fn helper1(&self,
-             inp: &mut InputBuffer,
+  fn helper1(inp: &mut InputBuffer,
              printer: &mut Printer<W>,
              grep: &Grep,
              path: &Path,
@@ -581,36 +588,38 @@ we have:
 The end result is much nicer.
 
 The first variable that the ~Searcher~ takes is an ~InputBuffer~. It is defined
-in the ~search_stream~ module too, and it provides buffering for the input file
-and it has the interesting feature to optionally keep part of the data across
-reads. This is need, for example, when context lines are needed by the user, or
-when a single read is not enough to reach the end of the current line.
+in the ~search_stream~ module too, and provides buffering for the input file. It
+has the interesting feature to be able to keep part of the data across reads.
+This is needed, for example, when the user requests context lines, or when a
+single read is not enough to reach the next end of line.
 
-The ~fill~ function reads from the input and optionally rolls over the contents
-of the buffer starting from the ~keep_from~ index:
+The ~fill~ function in the ~InputBuffer~, reads from the input and optionally
+rolls over the contents of the buffer starting from the ~keep_from~ index:
 
+#+CAPTION: ~search_stream.rs:521~
 #+BEGIN_SRC rust
   fn fill<R: io::Read>(&mut self, rdr: &mut R, keep_from: usize) -> Result<bool, io::Error>;
 #+END_SRC
 
-the interesting implementation bit here is that the buffer grows whenever it
-needs more room, but it never shrinks. This avoids some reallocations, at the
-expense of memory. This approach is perfectly fine in this case, since the
+The interesting implementation bit here is that the buffer grows whenever it
+needs more room, but it never shrinks. This avoids some re-allocations, at the
+expense of some memory. This approach is perfectly fine in this case, since the
 application is intended to work in one shot and then terminate. In a long
-running task such as a webserver, this is probably not what you want to do.
+running application such as a webserver, this is probably not what you want to
+do.
 
 After the buffer has been filled, the ~Grep~ matcher is run, and in case of a
-match, the results are printed, according to the options (context lines, line
+match, it prints the results, according to the options (context lines, line
 numbers, etc.).
 
-Note that the input buffer is taken by mutable reference by the ~Searcher~
-instance. This means that it can be reused for the next file, without allocating
-new memory for the buffer, with a new ~Searcher~ instance.
+Note that ~Searcher~ takes the input buffer by mutable reference. This means
+that it can be reused for the next file, without allocating new memory for the
+buffer, with a new ~Searcher~ instance.
 
 I'll skip most of the implementation review, even if the code may be
 interesting. Most of it however is just implementation detail that is not very
-relevant outside the text search tools. If you are interesting you can skim
-through the ~search_stream~ module code.
+relevant outside this specific case. If you are interesting you can skim through
+the ~search_stream~ module code.
 
 The ~search_mmap~ function, instead, creates a ~BufferSearcher~, defined in the
 ~search_buffer~ module, and calls run on it, like in the ~Searcher~ case:
@@ -624,7 +633,7 @@ The ~search_mmap~ function, instead, creates a ~BufferSearcher~, defined in the
 
 The same reasoning applies here: the struct is created and used only once for
 one file, because the ~run~ function takes ~self~ by value. The purpose of the
-~search_buffer~ module is to search inside a file, entirely contained in a
+~search_buffer~ module is to search inside a file completely contained in a
 single buffer, instead of a stream. This buffer is provided by a memory mapped
 file, and it's used only when a stream would be slower (generally this happens
 when searching into a single huge file). This module reuses some types provided
@@ -635,14 +644,14 @@ by the ~search_stream~ module:
   use search_stream::{IterLines, Options, count_lines, is_binary};
 #+END_SRC
 
-It notably does not use the ~InputBuffer~, since there is nothing to buffer
-here, everything is already available in the input buffer. The implementation is
+Notably, it does not use the ~InputBuffer~, since there is nothing to buffer
+here: everything is already available in the input buffer. The implementation is
 very basic, and it doesn't support some of the features the other module does
 (like showing context lines).
 
-No big surprise here. The only minor weak point for me is that this module
-depends on the ~search_stream~ module. It doesn't actually build on top of it,
-but it just imports some functionality. I'd rather try to move the common
+No big surprises here. The only minor weak point for me is that this module
+depends on the ~search_stream~ one. It doesn't actually build on top of it, but
+it just imports some functionality. I'd rather try to move the common
 implementation in another module from which they can both import. This makes
 sense, since the common stuff is indeed not specific to either of the modules.
 
@@ -653,6 +662,7 @@ top of the [[https://doc.rust-lang.org/regex/regex/index.html][Rust regex]] crat
 module. The result of a search is a ~Match~ instance, which is simply a position
 inside that buffer:
 
+#+CAPTION: ~grep/src/search.rs:12~
 #+BEGIN_SRC rust
   #[derive(Clone, Debug, Default, Eq, PartialEq)]
   pub struct Match {
@@ -664,6 +674,7 @@ inside that buffer:
 The ~Grep~ type is cloneable. This is important, since it can be built once
 (which is an expensive operation) and then cloned to all the worker threads:
 
+#+CAPTION: ~grep/src/search.rs:38~
 #+BEGIN_SRC rust
   #[derive(Clone, Debug)]
   pub struct Grep {
@@ -683,8 +694,8 @@ single console, without interleaving the results.
 
 The ~Searcher~ refers to a ~Printer~ struct to print the results, whenever a
 match is found (and the output is enabled). The ~Printer~ is defined in the
-~printer~ module and it encapsulates the output logic in general. It knows how
-to print a match, given some options and forwards the writes to an inner
+~printer~ module and it encapsulates the general output logic. It knows how to
+print a match, given some options, and forwards the writes to an inner
 ~Terminal~ type.
 
 #+CAPTION: ~printer.rs:15~
@@ -707,7 +718,8 @@ to print a match, given some options and forwards the writes to an inner
 
 Note that I took the comments out to make it shorter. As you can see, there is a
 generic writer ~W~ that is taken by value and a lot of other options. This
-generic parameter is expected to implement [[https://docs.rs/term/0.4.4/term/trait.Terminal.html][~term::Terminal~]] and ~Send~:
+generic parameter is expected to implement [[https://docs.rs/term/0.4.4/term/trait.Terminal.html][~term::Terminal~]] and ~Send~, as you
+can see in the struct implementation:
 
 #+CAPTION: ~printer.rs:73~
 #+BEGIN_SRC rust
@@ -721,6 +733,7 @@ The ~new~ method takes only a ~Terminal~ and sets all the options with a default
 value. To change them, the user needs to call the various builder methods,
 directly on the ~Printer~ itself, not on another builder helper. For example:
 
+#+CAPTION: ~printer.rs:121~
 #+BEGIN_SRC rust
   pub fn heading(mut self, yes: bool) -> Printer<W> {
       self.heading = yes;
@@ -732,11 +745,10 @@ takes ~self~ by mutable value and, after changing the ~heading~ option, returns
 ~self~ by value again.
 
 The implementation is simple. The public interface provides some methods to
-print the various match components, like the path, the context separator and
-the line contents. Everything is clear except the ~Send~ detail. The only thing
-that is still not clear to me is why the ~Send~ trait is also needed, since I
-don't see any threading in the struct implementation and all the print methods
-require a mutable ~self~, e.g.:
+print the various match components, like the path, the context separator and the
+line contents. The only thing that is still not clear to me is why the ~Send~
+trait is also needed, since I don't see any threading in the struct
+implementation, and all the print methods require a mutable ~self~, e.g.:
 
 #+CAPTION: ~printer.rs:207~
 #+BEGIN_SRC rust
@@ -756,8 +768,8 @@ all the writes are directed to the inner ~Terminal~.
 
 In the Linux case, the ~Terminal~ is the default one provided by the ~term~
 crate itself: [[https://docs.rs/term/0.4.4/term/terminfo/struct.TerminfoTerminal.html][~TerminfoTerminal~]]. On Windows ~ripgrep~ provides a custom
-implementation, since coloring needs a special treatment, to avoid performance
-hurt:
+implementation, since the coloring needs a special treatment, to avoid
+performance hurt:
 
 #+CAPTION: ~terminal_win.rs:5~
 #+BEGIN_SRC text
@@ -808,7 +820,7 @@ The implementation is provided by ~WindowsBuffer~:
 
 This struct implements ~terminfo::Terminal~ as we said before, and it contains a
 buffer of characters to print, a position on the buffer itself, and a vector of
-colors plus positions. Whenever something has to be print, and the write is
+colors and positions. Whenever something has to be print, and the write is
 called, the output is buffered in ~self.buf~:
 
 #+CAPTION: ~terminal_win.rs:107~
@@ -877,11 +889,12 @@ the console):
 #+END_SRC
 
 Here, if the terminal does not support coloring, there is nothing special to do,
-and all the buffer contents are written. Otherwise, for every color option, the
-buffer contents before that location is written and the option applied. This is
-repeated until the end of the buffer.
+and all the buffer contents are written. Otherwise, for every color option, it
+writes the buffer contents before that option location, and than applies the
+option. This is repeated until the end of the buffer.
 
-The actual terminal is then wrapped inside a ~ColoredTerminal~ instance:
+The terminal is not used as is by the higher level logic, but wrapped inside a
+~ColoredTerminal~ instance:
 
 #+CAPTION: ~out.rs:111~
 #+BEGIN_SRC rust
@@ -894,8 +907,9 @@ The actual terminal is then wrapped inside a ~ColoredTerminal~ instance:
 
 The purpose of this type is simple: determine if the current terminal supports
 coloring, and if so use it. If not, just drop the terminal and use its internal
-writer type. The color support is a costly operation, and so it's done only
-once, and the result is cached in a static variable:
+writer type. Determine color support is a costly operation, so it's done only
+once, and the result is cached in a static variable, with the help of the
+[[mhe:%0A][lazy_static]] crate:
 
 #+CAPTION: ~out.rs:123~
 #+BEGIN_SRC rust
@@ -921,8 +935,8 @@ The type then implements some specialized constructors for a bunch of types:
 If the terminal then supports coloring, the ~Colored(T)~ enum value (where ~T~
 is ~T: Terminal + Send~) is used. In this case the ~ColoredTerminal~ instance
 contains a ~Terminal~. Otherwise, the ~NoColor(T::Output)~ value is selected,
-using then only a plain ~io::Write~. The type then implements ~Terminal~ itself
-in this way:
+using then only a plain ~io::Write~. ~ColoredTerminal~ then implements
+~Terminal~ itself in this way:
 
 #+CAPTION: ~out.rs:254~
 #+BEGIN_SRC rust
@@ -948,9 +962,9 @@ present, or return an error otherwise. A possible solution would have been to
   }
 #+END_SRC
 
-for all the functions. The solution adopted here is more elegant. Implement a
-~map_result~ that applies the given function to the inner ~Terminal~ if it's
-present and return an error otherwise:
+for all the functions. The solution adopted here is more elegant. It Implements
+a ~map_result~ that applies the given function to the inner ~Terminal~ if it's
+present and returns an error otherwise:
 
 #+CAPTION: ~out.rs:217~
 #+BEGIN_SRC rust
@@ -991,8 +1005,8 @@ struct speaks for itself:
 
 The implementation is straightforward: whenever ~write~ is called with a
 ~ColoredTerminal~ as a buffer, it prints a separator (except for the first
-file), then the buffer contents and then flushes the terminal. Here is the Unix
-version:
+file), then prints the buffer contents and then flushes the terminal. Here is
+the Unix version:
 
 #+BEGIN_SRC rust
   #[cfg(not(windows))]
@@ -1010,17 +1024,25 @@ version:
   }
 #+END_SRC
 
-A similar but not exactly the same version is provided for Windows. There is
+A similar but not exactly the same version is provided for Windows, so there is
 some code duplication here. It would be better to abstract these details in
 ~ColoredTerminal~, providing a ~write_all~ method there, or in alternative, to
-introduce a new trait used by ~ColoredTerminal~ that does the same and is
-implemented by ~TerminfoTerminal~, ~WindowsBuffer~ and ~WindowsConsole~.
+introduce a new trait used by ~ColoredTerminal~ itself that does the same and
+than make ~TerminfoTerminal~, ~WindowsBuffer~ and ~WindowsConsole~ to implement
+it.
 
-* Conclusion
+* Concluding remarks
 In this post we have done a little ~ripgrep~ code review, looking at some of the
 design decisions made. The review is far from being complete, but my goal was to
 look at the patterns and break them down, in hope that they can be used in
 similar contexts by other projects. The ~ripgrep~ crate is a beautiful peace of
 software, from which the community can learn a lot.
+
+I need to make a side note here about the extensive usage of ~#[inline(always)]~
+and ~#[inline(never)]~ directives. I wonder if those have been added after
+profiling and if so, why the compiler have failed to identify those correctly. A
+possible use case is intra-crate inlining, but compiling with ~rustc -C lto~
+already allows to inline everything (by slowing down compilation) (see [[https://internals.rust-lang.org/t/when-should-i-use-inline/598][When
+should I use inline]])
 
 That's all folks.
