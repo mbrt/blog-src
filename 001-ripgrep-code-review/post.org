@@ -2,11 +2,6 @@
 # to get rid of the '_' subscript problem
 #+OPTIONS: ^:{}
 
-*** DONE the search buffer
-    CLOSED: [2016-11-27 dom 00:01]
-*** TODO ColoredTerminal
-*** TODO Out
-
 * Introduction
 I've been playing around with [[https://www.rust-lang.org][Rust]] for a year and a half, and as many other
 people already said, the best of it is the very welcoming and helpful community.
@@ -892,9 +887,109 @@ The type then implements some specialized constructors for a bunch of types:
 + ~WinConsole<io::Stdout>~;
 + and the one for the generic writer ~W: io::Write + Send~.
 
-If the terminal then supports coloring, the ~Colored(T)~ (where ~T~ is
-~T: Terminal + Send~ enum value is used, so the ~ColoredTerminal~ instance
+If the terminal then supports coloring, the ~Colored(T)~ enum value (where ~T~
+is ~T: Terminal + Send~) is used. In this case the ~ColoredTerminal~ instance
 contains a ~Terminal~. Otherwise, the ~NoColor(T::Output)~ value is selected,
-that contains only a plain ~io::Write~.
+using then only a plain ~io::Write~. The type then implements ~Terminal~ itself
+in this way:
+
+#+CAPTION: ~out.rs:254~
+#+BEGIN_SRC rust
+  impl<T: Terminal + Send> term::Terminal for ColoredTerminal<T> {
+      type Output = T::Output;
+
+      fn fg(&mut self, fg: term::color::Color) -> term::Result<()> {
+          self.map_result(|w| w.fg(fg))
+      }
+      // other very similar implementations...
+  }
+
+#+END_SRC
+
+The intended behavior here is to forward the function to the inner terminal, if
+present, or return an error otherwise. A possible solution would have been to
+~match self~ in this way:
+
+#+BEGIN_SRC rust
+  match *self {
+      ColoredTerminal::Colored(ref mut w) => w.fg(fg),
+      ColoredTerminal::NoColor(_) => Err(term::Error::NotSupported),
+  }
+#+END_SRC
+
+for all the functions. The solution adopted here is more elegant. Implement a
+~map_result~ that applies the given function to the inner ~Terminal~ if it's
+present and return an error otherwise:
+
+#+CAPTION: ~out.rs:217~
+#+BEGIN_SRC rust
+  impl<T: Terminal + Send> ColoredTerminal<T> {
+      fn map_result<F>(&mut self, mut f: F) -> term::Result<()>
+          where F: FnMut(&mut T) -> term::Result<()>
+      {
+          match *self {
+              ColoredTerminal::Colored(ref mut w) => f(w),
+              ColoredTerminal::NoColor(_) => Err(term::Error::NotSupported),
+          }
+      }
+  }
+#+END_SRC
+
+In this way the whole ~Terminal~ implementation is just a bunch of one-liners.
+
+The missing piece of this puzzle is the ~Out~ struct. The comment on top of the
+struct speaks for itself:
+
+#+CAPTION: ~out.rs:12~
+#+BEGIN_SRC rust
+  /// Out controls the actual output of all search results for a particular file
+  /// to the end user.
+  ///
+  /// (The difference between Out and Printer is that a Printer works with
+  /// individual search results where as Out works with search results for each
+  /// file as a whole. For example, it knows when to print a file separator.)
+  pub struct Out {
+      #[cfg(not(windows))]
+      term: ColoredTerminal<term::TerminfoTerminal<io::BufWriter<io::Stdout>>>,
+      #[cfg(windows)]
+      term: ColoredTerminal<WinConsole<io::Stdout>>,
+      printed: bool,
+      file_separator: Option<Vec<u8>>,
+  }
+#+END_SRC
+
+The implementation is straightforward: whenever ~write~ is called with a
+~ColoredTerminal~ as a buffer, it prints a separator (except for the first
+file), then the buffer contents and then flushes the terminal. Here is the Unix
+version:
+
+#+BEGIN_SRC rust
+  #[cfg(not(windows))]
+  pub fn write(&mut self, buf: &ColoredTerminal<term::TerminfoTerminal<Vec<u8>>>) {
+      self.write_sep();
+      match *buf {
+          ColoredTerminal::Colored(ref tt) => {
+              let _ = self.term.write_all(tt.get_ref());
+          }
+          ColoredTerminal::NoColor(ref buf) => {
+              let _ = self.term.write_all(buf);
+          }
+      }
+      self.write_done();
+  }
+#+END_SRC
+
+A similar but not exactly the same version is provided for Windows. There is
+some code duplication here. It would be better to abstract these details in
+~ColoredTerminal~, providing a ~write_all~ method there, or in alternative, to
+introduce a new trait used by ~ColoredTerminal~ that does the same and is
+implemented by ~TerminfoTerminal~, ~WindowsBuffer~ and ~WindowsConsole~.
 
 * Conclusion
+In this post we have done a little ~ripgrep~ code review, looking at some of the
+design decisions made. The review is far from being complete, but my goal was to
+look at the patterns and break them down, in hope that they can be used in
+similar contexts by other projects. The ~ripgrep~ crate is a beautiful peace of
+software, from which the community can learn a lot.
+
+That's all folks.
