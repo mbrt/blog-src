@@ -109,7 +109,25 @@ How does the output is managed?
   it;
 * The interesting part is how the outbuffer is stored in the worker as an
   `Option`, so it can be taken out and passed by value to the printer, and then
-  put back in place when no more needed.
+  put back in place when is not needed anymore.
+
+in Windows there is:
+
+```
+let out: Arc<Mutex<Out>>;
+let outbuf: Option<ColoredTerminal<WindowsBuffer>>;
+// inside out
+let term: ColoredTerminal<WinConsole<io::Stdout>>;
+```
+
+and in Linux:
+
+```
+let out: Arc<Mutex<Out>>;
+let outbuf: Option<ColoredTerminal<term::TerminfoTerminal<Vec<u8>>>>;
+// inside out
+let term: ColoredTerminal<term::TerminfoTerminal<io::BufWriter<io::Stdout>>>;
+```
 
 How the files are managed:
 

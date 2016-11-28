@@ -692,6 +692,64 @@ The last bit we are going to investigate now is the output handling. The
 challenge here is that ~ripgrep~ needs to write from multiple threads to a
 single console, without interleaving the results.
 
+Here is how the ~run~ function in our ~MultiWorker~ handles that:
+
+#+CAPTION: ~main.rs:274~
+#+BEGIN_SRC rust
+  let mut outbuf = self.outbuf.take().unwrap();
+  outbuf.clear();
+  let mut printer = self.worker.args.printer(outbuf);
+  self.worker.do_work(&mut printer, work);
+  // ...
+  let outbuf = printer.into_inner();
+  if !outbuf.get_ref().is_empty() {
+      let mut out = self.out.lock().unwrap();
+      out.write(&outbuf);
+  }
+  self.outbuf = Some(outbuf);
+#+END_SRC
+
+An output buffer is passed to a printer, that does some buffering. The printer
+is passed to the worker, that uses it to print the results. If anything has been
+buffered, lock the output and write everything. The output buffer is reused in
+this interesting way: it is kept as a ~Option~ field inside the ~MultiWorker~
+itself. For every file is then taken away from the option, passed by value to a
+~Printer~, and then when the ~Printer~ is done, put it back in the ~Option~.
+This allows to keep it mutable and pass it around without creating it every
+time.
+
+Let's take a look at the various types. The ~MultiWorker~ keeps a
+~ColoredTerminal~ instance in its ~self.outbuf~ field. Its type depends on the
+platform:
+
+#+BEGIN_SRC rust
+  #[cfg(not(windows))]
+  outbuf: Option<ColoredTerminal<term::TerminfoTerminal<Vec<u8>>>>,
+  #[cfg(windows)]
+  outbuf: Option<ColoredTerminal<WindowsBuffer>>,
+#+END_SRC
+
+The ~self.out~ is the same in all the platforms:
+
+#+BEGIN_SRC rust
+  let out: Arc<Mutex<Out>>;
+#+END_SRC
+
+As you can see, it can be shared and mutated by multiple threads, because it is
+wrapped in a ~Mutex~ and an ~Arc~.
+
+*** TODO In progress
+
+#+BEGIN_SRC rust
+  // Linux
+  let term: ColoredTerminal<term::TerminfoTerminal<io::BufWriter<io::Stdout>>>;
+  // Windows
+  let term: ColoredTerminal<WinConsole<io::Stdout>>;
+#+END_SRC
+
+*** DONE Original version
+    CLOSED: [2016-11-29 mar 00:07]
+
 The ~Searcher~ refers to a ~Printer~ struct to print the results, whenever a
 match is found (and the output is enabled). The ~Printer~ is defined in the
 ~printer~ module and it encapsulates the general output logic. It knows how to
