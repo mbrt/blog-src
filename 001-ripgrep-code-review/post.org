@@ -690,7 +690,7 @@ covered in the already mentioned [[http://blog.burntsushi.net/ripgrep/][Andrew's
 * Output handling
 The last bit we are going to investigate now is the output handling. The
 challenge here is that ~ripgrep~ needs to write from multiple threads to a
-single console, without interleaving the results.
+single console without interleaving the results.
 
 Here is how the ~run~ function in our ~MultiWorker~ handles that:
 
@@ -709,16 +709,23 @@ Here is how the ~run~ function in our ~MultiWorker~ handles that:
   self.outbuf = Some(outbuf);
 #+END_SRC
 
-An output buffer is passed to a printer, that does some buffering. The printer
-is passed to the worker, that uses it to print the results. If anything has been
-buffered, lock the output and write everything. The output buffer is reused in
-this interesting way: it is kept as a ~Option~ field inside the ~MultiWorker~
-itself. For every file is then taken away from the option, passed by value to a
-~Printer~, and then when the ~Printer~ is done, put it back in the ~Option~.
-This allows to keep it mutable and pass it around without creating it every
-time.
+An output buffer is taken from ~self~ and passed to a printer. The printer is
+then passed to the worker, that uses it to print the results. So far all the
+output went to the buffer, and not to the actual console. Then, if anything has
+been buffered, lock the output and write everything. The output buffer is reused
+in this interesting way: it is kept as an ~Option~ field inside the
+~MultiWorker~ itself. For every file, it is then moved away from the option,
+passed by value to a ~Printer~, and then when the ~Printer~ is done, put it back
+in the ~Option~. This allows to keep it mutable and pass it around by value
+without creating it every time.
 
-Let's take a look at the various types. The ~MultiWorker~ keeps a
+The trick used here, to avoid to interleave the prints, is to buffer all the
+matches found in a file into a "virtual terminal" that doesn't print to the
+console. After the search in that file is done, the output is written in one
+shot, by locking a shared ~Out~ object and write the buffer contents to the
+actual console.
+
+Let's take a look at the various types involved. The ~MultiWorker~ keeps a
 ~ColoredTerminal~ instance in its ~self.outbuf~ field. Its type depends on the
 platform:
 
@@ -738,23 +745,24 @@ The ~self.out~ is the same in all the platforms:
 As you can see, it can be shared and mutated by multiple threads, because it is
 wrapped in a ~Mutex~ and an ~Arc~.
 
-*** TODO In progress
+Inside an ~Out~ instance, there is the terminal used to write directly to the
+console:
 
 #+BEGIN_SRC rust
-  // Linux
+  #[cfg(not(windows))]
   let term: ColoredTerminal<term::TerminfoTerminal<io::BufWriter<io::Stdout>>>;
-  // Windows
+  #[cfg(windows)]
   let term: ColoredTerminal<WinConsole<io::Stdout>>;
 #+END_SRC
 
-*** DONE Original version
-    CLOSED: [2016-11-29 mar 00:07]
+A ~ColoredTerminal~ that refers to a ~TerminfoTerminal~ on Linux, and to a
+~WinConsole~ on Windows. They are both structs defined in the [[https://crates.io/crates/term][term crate]].
 
-The ~Searcher~ refers to a ~Printer~ struct to print the results, whenever a
-match is found (and the output is enabled). The ~Printer~ is defined in the
-~printer~ module and it encapsulates the general output logic. It knows how to
-print a match, given some options, and forwards the writes to an inner
-~Terminal~ type.
+But let's step back a little bit and describe all these types a little bit
+better. The ~Searcher~, uses a ~Printer~, whenever a match is found (and the
+output is enabled). The ~Printer~ is defined in the ~printer~ module and it
+encapsulates the general output logic. It knows how to print a match, given some
+options, and forwards the writes to an inner ~Terminal~ type.
 
 #+CAPTION: ~printer.rs:15~
 #+BEGIN_SRC rust
