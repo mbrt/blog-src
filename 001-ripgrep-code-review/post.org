@@ -725,6 +725,8 @@ console. After the search in that file is done, the output is written in one
 shot, by locking a shared ~Out~ object and write the buffer contents to the
 actual console.
 
+[[file:out.svg]]
+
 Let's take a look at the various types involved. The ~MultiWorker~ keeps a
 ~ColoredTerminal~ instance in its ~self.outbuf~ field. Its type depends on the
 platform:
