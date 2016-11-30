@@ -2,7 +2,6 @@
 # to get rid of the '_' subscript problem
 #+OPTIONS: ^:{}
 
-* Introduction
 I've been playing around with [[https://www.rust-lang.org][Rust]] for a year and a half, and the best part of
 it, like many others say, has been the very helpful community. There are a lot
 of online resources that help you to get started: the [[https://doc.rust-lang.org/book/][Rust book]], the
@@ -23,6 +22,7 @@ attempts to target the "intermediate level" Rust developers (like me), by
 looking at the [[https://github.com/BurntSushi/ripgrep][ripgrep]] crate by Andrew Gallant. A great example of good Rust, in
 my opinion.
 
+* Introduction
 I'm not going to explain everything about the crate, since there is already a
 very good [[http://blog.burntsushi.net/ripgrep/][blog post]] by Andrew himself, explaining how the application works from
 a functional perspective, and some used algorithms. We are going instead to walk

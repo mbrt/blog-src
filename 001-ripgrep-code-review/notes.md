@@ -5,7 +5,7 @@ Reviewed version: 0.2.5-4-gf728708
 
 TODO:
 
-* [ ] Check diagrams colors
+* [x] Check diagrams colors
 * [ ] Spellcheck everything;
 
 Big picture
