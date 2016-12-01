@@ -6,21 +6,21 @@ I've been playing around with [[https://www.rust-lang.org][Rust]] for a year and
 it, like many others say, has been the very helpful community. There are a lot
 of online resources that help you to get started: the [[https://doc.rust-lang.org/book/][Rust book]], the
 [[https://doc.rust-lang.org/nomicon/][Rustonomicon]] and many [[https://this-week-in-rust.org/][blog posts]] and [[http://stackoverflow.com/questions/tagged/rust][stack overflow questions]]. After I learned
-the basics I felt a bit lost though. I couldn't find enough resources for my
-"intermediate level". I'm a C++ developer in my daily job, and I miss books like
-[[http://www.aristeia.com/books.html][Effective C++]] from Scott Meyers, the [[https://herbsutter.com/][Herb Sutter's blog]] and a lot of online
-resources that help you with the advanced C++ topics (that are a lot... sigh).
-They teach you how to get the best from the language, how to use it properly,
-and how to structure your code to be more clear and effective. Those resources
-are not completely absent in the Rust community, but neither common.
+the basics I felt a bit lost though. I couldn't find enough resources for
+intermediate-level-Rustaceans. I'm a C++ developer in my daily job, and so I'm
+used with books like [[http://www.aristeia.com/books.html][Effective C++]] from Scott Meyers, the [[https://herbsutter.com/][Herb Sutter's blog]] and
+a lot of online resources that always helped me with advanced C++ topics (that
+are a lot... :sigh:). Those resources teach you how to get the best from the
+language, how to use it properly, and how to structure your code to be more
+clear and effective. Those resources are not completely absent in the Rust
+community, but neither common.
 
 How do you learn those things then? Well, there are two ways in my opinion: you
-spend a lot of time learning by doing, or you look at some good code. I think
+spend a lot of time and learn by doing, or you look at some good code. I think
 code reviews are incredibly useful; you can see how other people reason about
 problems you also struggled with, and how they have solved them. This post
-attempts to target the "intermediate level" Rust developers (like me), by
-looking at the [[https://github.com/BurntSushi/ripgrep][ripgrep]] crate by Andrew Gallant. A great example of good Rust, in
-my opinion.
+attempts to target those intermediate-level-Rustaceans (like me), by looking at
+the [[https://github.com/BurntSushi/ripgrep][ripgrep]] crate by Andrew Gallant, a great example of good Rust.
 
 * Introduction
 I'm not going to explain everything about the crate, since there is already a
