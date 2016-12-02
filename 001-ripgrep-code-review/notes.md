@@ -6,7 +6,8 @@ Reviewed version: 0.2.5-4-gf728708
 TODO:
 
 * [x] Check diagrams colors
-* [ ] Spellcheck everything;
+* [x] Spellcheck everything
+* [ ] Add google analytics
 
 Big picture
 -----------
