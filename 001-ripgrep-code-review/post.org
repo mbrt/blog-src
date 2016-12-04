@@ -1108,9 +1108,23 @@ compiler have failed to identify them correctly. A possible use case is
 intra-crate inlining, but compiling with ~rustc -C lto~ already allows to inline
 everything (by slowing down compilation).[fn:5]
 
-In any case, I found the ~ripgrep~ crate a beautiful peace of software, from
+In any case, I found the ~ripgrep~ crate a beautiful piece of software, from
 which I could learn a lot. I hope I was able to convey this beauty with this
 post.
+
+** Feedback
+[[https://twitter.com/burntsushi5][Andrew]] posted his feedback on Twitter:
++ output handling has been reworked a in [[https://github.com/BurntSushi/ripgrep/pull/240][PR#240]], so interested people might give
+  it a glance;
++ regarding the inline directives: he applied them after profiling, and
+  ~#[inline(never)]~ can make the profile reports more readable, but they will
+  be revisited;
++ the search code will be probably reworked and incorporated in the ~grep~ crate.
+
+I have corrected a typo, thanks [[https://twitter.com/toqueteos][@toquetos]].
+
+There is some discussion going on in the [[https://m.reddit.com/r/rust/comments/5gayqw/ripgrep_code_review/][r/rust]] subreddit. Thank you guys for
+the feedback and the kind words.
 
 That's all folks.
 
