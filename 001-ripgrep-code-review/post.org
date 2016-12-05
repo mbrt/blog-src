@@ -1113,18 +1113,41 @@ which I could learn a lot. I hope I was able to convey this beauty with this
 post.
 
 ** Feedback
-[[https://twitter.com/burntsushi5][Andrew]] posted his feedback on Twitter:
-+ output handling has been reworked a in [[https://github.com/BurntSushi/ripgrep/pull/240][PR#240]], so interested people might give
-  it a glance;
-+ regarding the inline directives: he applied them after profiling, and
-  ~#[inline(never)]~ can make the profile reports more readable, but they will
-  be revisited;
-+ the search code will be probably reworked and incorporated in the ~grep~ crate.
+[[https://twitter.com/burntsushi5][Andrew]] posted his feedback on Twitter and on [[https://news.ycombinator.com/item?id=13097556][HN]]. I report his comment here,
+because it's relevant for some of the remarks I made:
+
+#+BEGIN_QUOTE
+ripgrep author here! This is a great review, thanks for doing it! I'd like to
+respond to a few of the bad things pointed out. :P
+
+The search code is indeed in a less than ideal state. I've mostly avoided
+refactoring it because I want to move it to its own separate crate. I've been
+steadily doing this for other things. Namely, ripgrep used to be a single main
+crate plus a small regex handling crate (grep), but now it's several: globset,
+grep, ignore, termcolor and wincolor. I'd like to roll the search code into the
+grep crate so that others can use it. Once that's done, ripgrep proper will be a
+pretty small, limited mostly to argv handling and output handling.
+
+I do sometimes get overzealous with inline(always) and inline(never). Both are
+almost always a result of trying things while profiling, and then forgetting to
+remove them. If you look closely, most of them are in the core searching code
+where performance is quite important!
+
+Finally, this code review was done while I was in the middle of moving more of
+ripgrep code out into the `ignore` and `termcolor` crates. The `ignore` crate
+does all the gitignore handling (which is quite tricky and is now being used by
+the [[https://github.com/Aaronepower/tokei][tokei]] project) and provides a parallel recursive directory iterator, which
+made ripgrep even faster! The `termcolor` crate handles cross platform coloring
+shenanigans, including Windows consoles and mintty. It wasn't fun: [[https://github.com/BurntSushi/ripgrep/issues/94#issuecomment][issue #94]]...
+--- The author did a great job reviewing the previous solution I used for colors
+though, and was something I really wasn't proud of!
+#+END_QUOTE
 
 I have corrected a typo, thanks [[https://twitter.com/toqueteos][@toquetos]].
 
-There is some discussion going on in the [[https://m.reddit.com/r/rust/comments/5gayqw/ripgrep_code_review/][r/rust]] subreddit. Thank you guys for
-the feedback and the kind words.
+There is some discussion going on in the [[https://m.reddit.com/r/rust/comments/5gayqw/ripgrep_code_review/][r/rust]] subreddit, and on [[https://news.ycombinator.com/item?id=13097125][HN]]. Thank you
+guys for the feedback and the kind words, and thanks to Andrew for his great
+work.
 
 That's all folks.
 
