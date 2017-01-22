@@ -1,0 +1,42 @@
+#+TITLE: Antifurto notes
+
+* Overview
+There are the following components in Antifurto:
++ =antifurto= executable, written in C++
++ =antifurto.fgci= executable, written in C++
++ the web interface, written in PHP + bootstrap
++ a bash script to send e-mails
++ a bunch of third party python scripts to send whatsapp messages, upload
+  pictures to Dropbox.
+
+The design is heavily based on [[https://en.wikipedia.org/wiki/Observer_pattern][observers]], [[https://en.wikipedia.org/wiki/Type_erasure][type erasure]] and the [[https://en.wikipedia.org/wiki/Composition_over_inheritance][composite reuse
+principle]], to minimize dependencies among components. Well, at least it was an
+attempt I made to implement the project with those principles in mind.
+
+* Antifurto main executable
+** Antifurto class
+This class is responsible to start and stop the monitoring and the live view,
+orchestrating the resources involved. It uses a ~Config~ structure for the
+configuration. It can be used as an external library, since it is
+self-contained.
+
+Interesting stuff:
++ the way it handles start and stop
++ it uses PIMPL pattern to hide all the dependencies to the outside
+
+** MonitorController
+This class is the main controller that handls the monitoring functionality. It
+delegates to its sub-components tasks such as motion detection, and
+notification. Whenever a picture is captured, it is passed along by calling
+~examinePicture~:
+
+#+BEGIN_SRC c++
+  void examinePicture(const Picture& picture);
+#+END_SRC
+
+Whenever some motion is detected, the capture rate is increased, and if the
+motion continues, the notifications are fired.
+
+Interesting stuff:
++ it uses two callbacks to ask for a change in the capture rate, and for
+  enabling / disabling the capture.
