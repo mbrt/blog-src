@@ -9,9 +9,14 @@ There are the following components in Antifurto:
 + a bunch of third party python scripts to send whatsapp messages, upload
   pictures to Dropbox.
 
+** Architecture
 The design is heavily based on [[https://en.wikipedia.org/wiki/Observer_pattern][observers]], [[https://en.wikipedia.org/wiki/Type_erasure][type erasure]] and the [[https://en.wikipedia.org/wiki/Composition_over_inheritance][composite reuse
 principle]], to minimize dependencies among components. Well, at least it was an
 attempt I made to implement the project with those principles in mind.
+
+** Critique on the design
++ Not safe to put everything in the device, included the server part. This has
+  been done to avoid external services.
 
 * Antifurto main executable
 ** Antifurto class
@@ -19,6 +24,9 @@ This class is responsible to start and stop the monitoring and the live view,
 orchestrating the resources involved. It uses a ~Config~ structure for the
 configuration. It can be used as an external library, since it is
 self-contained.
+
+It contains a ~MonitorController~, a ~CameraController~ and a
+~LiveViewController~.
 
 Interesting stuff:
 + the way it handles start and stop
@@ -40,3 +48,61 @@ motion continues, the notifications are fired.
 Interesting stuff:
 + it uses two callbacks to ask for a change in the capture rate, and for
   enabling / disabling the capture.
+
+** CameraController
+This class is responsible to take pictures from a camera at a given rate. The
+camera type is statically determined in =StaticConfig.hpp=. In the Raspberry-Pi
+case, there is a homegrown version implemented by ~PiCamera~, that uses a
+slightly modified version of the =picam= library, that I found [[http://robotblogging.blogspot.nl/2013/10/an-efficient-and-simple-c-api-for.html][here]]. This
+library is a simple interface on top of the Raspberry [[https://github.com/mbrt/userland][userland]] library I forked
+just to ease the build. To capture images outside the Raspberry world I instead
+opted for the [[http://opencv.org/][OpenCV]] library and implemented ~CvCamera~. Now, I have to admit
+that the ~CvCaptureRAII~ class might look a bit weird, but it was an attempt to
+implement the camera resource through [[https://en.wikipedia.org/wiki/Resource_acquisition_is_initialization][RAII]]. I took inspiration from Martinho
+Fernandez [[https://rmf.io/cxx11/rule-of-zero][rule of zero]] blog post and the [[http://scottmeyers.blogspot.nl/2014/03/a-concern-about-rule-of-zero.html][concern about the rule of zero]] by Scott
+Meyers. To discuss this in detail I would need an entire blog post in itself, so
+I'll just point you to these valuable resources. To be honest I'm not very
+satisfied by its look and feel now, so maybe refer to the ~PiCamera~
+implementation, it's just a one liner:
+
+#+BEGIN_SRC c++
+  std::unique_ptr<CCamera, void(*)(CCamera*)> capture_;
+#+END_SRC
+
+It uses the non-so-well-known custom deleter feature of ~std::unique_ptr~.
+Again, look at Fernandez post for an explanation on why I didn't just
+implemented a stupid destructor for ~PiCamera~.
+
+Since these two different implementations are not intended to be used in the
+same codebase, I didn't introduce any common interface, and just used a compile
+time define and a ~typedef~ to switch between them:
+
+#+BEGIN_SRC c++
+  namespace antifurto {
+  namespace config {
+
+  #if defined(ANTIFURTO_RASPBERRY)
+      using Camera = antifurto::PiCamera;
+  #else
+      using Camera = antifurto::CvCamera;
+  #endif
+
+  }}
+#+END_SRC
+
+The code will simply refer to the ~antifurto::config::Camera~ type to get a
+capture resource. I just needed to make sure their public interface (i.e. the
+public methods) are the same, so the two classes could be used interchangeably.
+
+TODO: finish this class:
++ members
++ how does it work
++ cleanup the camera part (maybe a sub-section?)
+
+** Homegrown utility libraries
+*** meta
+*** fs
+*** log
+*** concurrency
+*** ipc
+*** text
