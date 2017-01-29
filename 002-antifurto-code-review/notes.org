@@ -14,7 +14,10 @@ The design is heavily based on [[https://en.wikipedia.org/wiki/Observer_pattern]
 principle]], to minimize dependencies among components. Well, at least it was an
 attempt I made to implement the project with those principles in mind.
 
-** Critique on the design
+*TODO*: block diagram with the flow of pictures here. Explain the interactions
+between live view and monitoring functionalities.
+
+*** Critique on the design
 + Not safe to put everything in the device, included the server part. This has
   been done to avoid external services.
 
@@ -50,10 +53,21 @@ Interesting stuff:
   enabling / disabling the capture.
 
 ** CameraController
-This class is responsible to take pictures from a camera at a given rate. The
-camera type is statically determined in =StaticConfig.hpp=. In the Raspberry-Pi
-case, there is a homegrown version implemented by ~PiCamera~, that uses a
-slightly modified version of the =picam= library, that I found [[http://robotblogging.blogspot.nl/2013/10/an-efficient-and-simple-c-api-for.html][here]]. This
+This class is responsible to take pictures from a camera at a given rate. An
+user of this class can register an observer and specify the rate at which the
+pictures have to be taken. Every time a picture is taken, the observer callback
+is called. If multiple observers are interested in different capture rates, the
+minimum rate is used. This means that an observer specifies the minimum speed,
+not the exact one.
+
+To implement this functionality, in a separate thread a ~Metronome~ class sleeps
+the required time, and then the ~Camera~ class takes a picture. Every time an
+observer is registered or de-registered, the sleep time is updated.
+
+** Camera
+The camera type is statically determined in =StaticConfig.hpp=. In the
+Raspberry-Pi case, there is a homegrown version implemented by ~PiCamera~, that
+uses a slightly modified version of the =picam= library, that I found [[http://robotblogging.blogspot.nl/2013/10/an-efficient-and-simple-c-api-for.html][here]]. This
 library is a simple interface on top of the Raspberry [[https://github.com/mbrt/userland][userland]] library I forked
 just to ease the build. To capture images outside the Raspberry world I instead
 opted for the [[http://opencv.org/][OpenCV]] library and implemented ~CvCamera~. Now, I have to admit
@@ -94,10 +108,26 @@ The code will simply refer to the ~antifurto::config::Camera~ type to get a
 capture resource. I just needed to make sure their public interface (i.e. the
 public methods) are the same, so the two classes could be used interchangeably.
 
-TODO: finish this class:
-+ members
-+ how does it work
-+ cleanup the camera part (maybe a sub-section?)
+** LiveViewController
+This class starts and stops the live view functionality. It doesn't implement
+the functionality itself; it just controls the lifetime of a ~LiveView~ object.
+From the outside it takes pictures and start and stop commands. Whenever a
+picture comes, it is forwarded to the internal ~LiveView~ object, which in turn
+answer if it has been able to process the picture or not. After a certain
+timeout with the live view not progressing, the view is stopped:
+
+#+BEGIN_SRC c++
+  if (liveView_->addPicture(p))
+      lastPictureWrittenTime_ = system_clock::now();
+  else if (system_clock::now() - lastPictureWrittenTime_ > timeout_)
+      stop();
+#+END_SRC
+
+The ~stop~ function invokes a callback, informing that the live view is not
+interested in the stream of pictures anymore.
+
+** LiveView
+*TODO*
 
 ** Homegrown utility libraries
 *** meta
