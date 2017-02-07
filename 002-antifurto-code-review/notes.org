@@ -127,12 +127,100 @@ The ~stop~ function invokes a callback, informing that the live view is not
 interested in the stream of pictures anymore.
 
 ** LiveView
-*TODO*
+Tis class is responsible to forward pictures to a [[http://zeromq.org/][ZeroMQ]] socket. It has a single
+producer / single consumer queue (see the [[concurrency]] section) and a worker
+thread to offload the communication.
+
+Interesting:
++ the queue is a non-blocking lock-free queue, that allows minimum interruption
+  for the producer;
++ we use the [[http://zguide.zeromq.org/page:all#Ask-and-Ye-Shall-Receive][request-reply pattern]] in ZeroMQ, that allows a simple communication
+  between the main executable and the frontend;
++ whenever the queue is full, the images get discarded, and the caller is
+  notified. The ~LiveViewController~ timeouts when the queue is full for too
+  long and shuts the live view off.
 
 ** Homegrown utility libraries
 *** meta
+This namespace contains some generic patterns and algorithms that do not depend
+on the specific details of the project itself. In =Observer.hpp== you can find a
+generic implementation of the [[https://en.wikipedia.org/wiki/Observer_pattern][observer pattern]]. A ~Subject~ wants to provide
+observers the possibility to register for events. The class takes a variadic
+number of type parameters, that will be used in the notification. For example:
+
+#+BEGIN_SRC c++
+  Subject<int, float> s;
+  auto reg = s.registerObserver([](int a, float b) { print(a, b); });
+  s.notify(3, 3.14);
+#+END_SRC
+
+in this example we want to notify our observer with an integer and a float. To
+do that we just need to declare ~Subject~ with the right parameters. This will
+in turn be able to accept observers that respect the ~std::function<void(int,
+float)>~ signature.
+
+Interesting:
++ the registration returns a token that when goes out of scope unregisters the
+  observer automatically;
++ it is possible to register and unregister observers within notification
+  callbacks (re-entrant calls are supported).
+
+Other small utilities are also present, like ~ErasedUniquePtr~, that provides an
+unique pointer with an erased deleter. This is an useful workaround to a subtle
+problem when you want to forward declare a class and use it in an unique
+pointer. For more details see the [[https://akrzemi1.wordpress.com/2013/12/11/type-erasure-part-iii/][type erasure post]] of Andrzej's blog.
+
 *** fs
+This namespace contains simple path manipulation utilities to concatenate
+multiple paths with a single call:
+
+#+BEGIN_SRC c++
+  std::string p = fs::concatPaths("/var/log", bar, "file.txt");
+#+END_SRC
+
 *** log
+This namespace contains logging utilities. The focus of this library was to
+provide a fast and simple logging without using macro shenanigans.
+
+You can use it with a call to a free function, that will return the proper
+logger:
+
+#+BEGIN_SRC c++
+  log::debug() << "my log here " << 15;
+#+END_SRC
+
+There is also a ~reload~ function. When a log rotation occurs it will simply
+close the old file (that has been rotated) and open a new file in the same
+place. Ignored log levels are implemented by returning a logger that writes to a
+~NullSink~, which simply does nothing. Interestingly cryptic is the
+implementation of an ~std::outstream~ that does nothing. You can find it in
+=log/NullStream.hpp=.
+
 *** concurrency
+This namespace contains some classes to deal with concurrency. An interesting
+one is ~SpScQueue~, that wraps a worker thread and allows to enqueue work items
+for it. The type of the work item is templated, to allow reusability. The queue
+is a lock-free implementation that can be chosen at compile time among a
+fixed-size and a dynamically allocated one. The former is preferred in case the
+maximum queue size is known at compile time.
+
+As a side note I would like to add here that since the project deals with
+real-time data, avoiding dynamic allocations can be critical. We used fixed
+bound queues in all places for this reason.
+
+Another interesting class is the ~TaskScheduler~ one. It provides the
+possibility to schedule tasks at certain time points, ether one-shot or
+periodically re-scheduled:
+
+#+BEGIN_SRC c++
+  void scheduleAt(Clock::time_point t, Task w);
+  void scheduleAfter(Clock::duration d, Task w);
+  void scheduleEvery(Clock::duration d, Task w);
+#+END_SRC
+
+The work items are processed one after the other in a worker thread, so delays
+added by one task impact on the next ones. It is for this reason used only for
+short tasks.
+
 *** ipc
 *** text
