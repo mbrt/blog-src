@@ -52,6 +52,46 @@ Interesting stuff:
 + it uses two callbacks to ask for a change in the capture rate, and for
   enabling / disabling the capture.
 
+** TODO MotionDetector
+This class uses the [[http://opencv.org/][OpenCV]] library to examine the pictures flow and determines
+when there something moving. It implements the observer pattern to notify
+observers of the current state. The motion detection code is pretty simple:
+
+#+BEGIN_SRC c++
+  cv::absdiff(curr_, p, currDiff_);
+  cv::bitwise_and(prevDiff_, currDiff_, motion_);
+  if (motionHappened())
+    onMotionDetected();
+   else
+     onNoMotion();
+  // save
+  std::swap(prevDiff_, currDiff_);
+  curr_ = p;
+#+END_SRC
+
+The code works with three pictures: the current one and the two previous. Two
+images are computed out of them by making a difference (i.e. subtracting the
+gray values of the pixels one by one) between the first with the second and the
+second with the third. Then a bitwise and is computed between them. Random noise
+will be filtered out, since it's unlikely to stay among three frames and the
+image will be almost completely black. Whenever something moves however, certain
+areas of the pictures will differ in the three frames, and so the difference
+will produce white pixels. These pixels are then counted in ~motionHappened~,
+and if they reach a certain number, motion is detected.
+
+There is an additional layer of protection against errors, and it's a state
+machine that counts how many consecutive moving pictures have been detected.
+These states are used to better control:
++ energy saving
++ picture capturing
++ alarm notifications
+
+*** TODO diagram here
+
+** TODO RecordingController
+** TODO Whatsapp notifications
+** TODO Mail notifications
+
 ** CameraController
 This class is responsible to take pictures from a camera at a given rate. An
 user of this class can register an observer and specify the rate at which the
@@ -223,4 +263,98 @@ added by one task impact on the next ones. It is for this reason used only for
 short tasks.
 
 *** ipc
+This namespace contains classes related to child processes and inter-process
+communication. There is a ~forkAndCall~ function, that forks the process, calls
+a the given function and returns the function result by using the child process
+exit code:
+
+#+BEGIN_SRC c++
+  /// This function fork the process, calls the function in the child process,
+  /// wait for completion and returns the function return value.
+  ChildProcess forkAndCall(std::function<int()> f);
+#+END_SRC
+
+The child process itself can be killed or waited. In the latter case, the
+function return code will be returned.
+
+There is a ~NamedPipe~ class that provides Linux named pipes. The constructor
+creates a fifo with the given file name, and the destructor removes it.
+
+There is an interesting ~PosixSignalHandler~ class, that handles POSIX signals
+safely. You need to use it carefully though: initialize it at the beginning of
+the main function, before any thread creation, and register all the signal
+handlers by using:
+
+#+BEGIN_SRC c++
+  void setSignalHandler(int signal, Handler h);
+#+END_SRC
+
+where an handler is a callback that takes the signal that just happened:
+
+#+BEGIN_SRC c++
+  using Handler = std::function<void(int)>;
+#+END_SRC
+
+The POSIX standard says that a lot of functions are not safe to be used within
+signal handlers. For example it's not possible to allocate heap memory and call
+many standard library functions. We need however to support arbitrary code
+execution in the handlers, so to workaround this we use a vector of atomic
+booleans, one for each possible signal. Whenever a signal is sent to the
+process, the handler flips the corresponding boolean to true. A separate thread
+polls that vector, and executes the registered handlers, if any were given. This
+allows the signal handler to return immediately and in a safe way:
+
+#+BEGIN_SRC c++
+  std::vector<std::atomic<bool>> signalsToBeHandled(SIGRTMAX);
+
+  void sigactionHandler(int sig, siginfo_t* , void* )
+  {
+    signalsToBeHandled[sig].store(true, std::memory_order_release);
+  }
+#+END_SRC
+
+and the user-defined handler to be called asynchronously in a separate thread.
+In this way arbitrary code can be executed.
+
+There is a simple ~Process~ class, that allows to create child processes, run
+them with user given parameters and get the standard output. Nothing fancy.
+
 *** text
+In this namespace we have some string manipulation utilities, like ~toString~.
+This free function allows to convert in an ~std::string~ any list of printable
+objects, e.g.
+
+#+BEGIN_SRC c++
+  std::string s = text::toString("my ", std::string("s"), 15, true);
+#+END_SRC
+
+Allowing to both covert objects into strings and concatenate them, without the
+need of odd ~std::ostringstream~ objects all around the codebase.
+
+A ~TextReplace~ class allows to do replace variable occurrences in a text with
+user specified values. For example:
+
+#+BEGIN_SRC c++
+  std::ifstream f("file.txt");
+  std::ostringstream out;
+  text::TextReplace r;
+  r.addVariable("var", "X");
+  r.addVariable("foo", "BAR");
+  r.replaceVariables(f, out);
+#+END_SRC
+
+and suppose =file.txt= contains:
+
+#+BEGIN_EXAMPLE
+  replace ${var} variables
+  with ${foo} their values ${p}.
+#+END_EXAMPLE
+
+the result of the replacement will be:
+
+#+BEGIN_EXAMPLE
+  replace X variables
+  with BAR their values ${p}.
+#+END_EXAMPLE
+
+Note that unknown variables are left untouched.
