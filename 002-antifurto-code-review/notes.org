@@ -61,9 +61,9 @@ observers of the current state. The motion detection code is pretty simple:
   cv::absdiff(curr_, p, currDiff_);
   cv::bitwise_and(prevDiff_, currDiff_, motion_);
   if (motionHappened())
-    onMotionDetected();
-   else
-     onNoMotion();
+      onMotionDetected();
+  else
+      onNoMotion();
   // save
   std::swap(prevDiff_, currDiff_);
   curr_ = p;
@@ -88,10 +88,98 @@ These states are used to better control:
 
 *** TODO diagram here
 
-** TODO RecordingController
+** RecordingController
+This class is responsible of managing the registration of the pictures while an
+alarm is active. It accepts pictures with ~void addPicture(Picture p)~ and
+registers to the [[MotionDetector]] to know when to start and stop the recording.
+The recording is done by saving jpeg pictures on the local file system (by using
+[[PictureArchive]]) and uploading them to Dropbox (by using [[DropboxUploader]]).
+
+#+BEGIN_SRC c++
+  void RecordingController::onAlarmStateChanged(MotionDetector::State state)
+  {
+      using State = MotionDetector::State;
+      switch (state) {
+      case State::NO_MOTION:
+          archive_.stopSaving();
+          break;
+      case State::NO_ALARM:
+          enqueueOlderPictures();
+          break;
+      case State::ALARM:
+          archive_.startSaving();
+          break;
+      case State::PRE_ALARM:
+      default:
+          break;
+      }
+  }
+#+END_SRC
+
+Whenever the motion detector notifies this class about an alarm, it starts to
+save the pictures. When there is no motion involved (even if the alarm is still
+active), the recording is stopped.
+
+Saving pictures in real time is important, both on the disk and online. If there
+is a slow upload for any reason, the queue between the producer (the [[Camera]]) and
+the consumer grows. This would mean that by looking at the pictures online, the
+delay between capture and upload will grow more and more over time during
+alarms. To avoid this behavior, the queue size is limited, and whenever it is
+full, the coming pictures are queued in a secondary one:
+
+#+BEGIN_SRC c++
+  void RecordingController::onPictureSaved(const std::string& fileName)
+  {
+      if (!uploadWorker_.enqueue(fileName)) {
+          log::info() << "Failed to upload picture to Dropbox: queue is full";
+          std::unique_lock<std::mutex> lock(toUploadAfterQueueMutex_);
+          toUploadAfterQueue_.emplace(fileName);
+      }
+  }
+#+END_SRC
+
+This ensures a fixed maximum delay between capture and upload. All the missing
+pictures are instead uploaded when the situation is more quiet, and the alarm is
+not active (the ~case State::NO_ALARM:~ above):
+
+#+BEGIN_SRC c++
+  while (!toUploadAfterQueue_.empty()) {
+      if (uploadWorker_.enqueue(toUploadAfterQueue_.front()))
+          toUploadAfterQueue_.pop();
+      else
+          break;
+     }
+  // if the queue is not empty, we need to schedule an upload after
+  if (!toUploadAfterQueue_.empty()) {
+      log::info() << "Cannot empty the upload queue. Schedule a new upload";
+      scheduler_.scheduleAfter(std::chrono::minutes(10), [this] {
+            enqueueOlderPictures();
+      });
+   }
+#+END_SRC
+
+The logic is a bit brutal but it works. While there is still something to
+upload, it adds the pictures to the upload queue. If the queue gets full again,
+a new procedure is scheduled after ten minutes.
+
+There is another maintenance procedure, to avoid a full hard drive. Every 24
+hours, older pictures are removed. Depending on the configuration, only up to a
+certain amount of days is kept:
+
+#+BEGIN_SRC c++
+  // schedule maintenance at every midnight
+  using namespace std::chrono;
+  auto maintenanceWork = [this] { performMaintenance(); };
+  scheduler_.scheduleAt(concurrency::tomorrow() + minutes(1), [=] {
+      performMaintenance();
+      scheduler_.scheduleEvery(hours(24), maintenanceWork);
+  });
+#+END_SRC
+
+** TODO PictureArchive
+** TODO DropboxUploader
 ** TODO Whatsapp notifications
 ** TODO Mail notifications
-
 ** CameraController
 This class is responsible to take pictures from a camera at a given rate. An
 user of this class can register an observer and specify the rate at which the
