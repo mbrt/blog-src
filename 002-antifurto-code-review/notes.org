@@ -6,7 +6,7 @@ There are the following components in Antifurto:
 + =antifurto.fgci= executable, written in C++
 + the web interface, written in PHP + bootstrap
 + a bash script to send e-mails
-+ a bunch of third party python scripts to send whatsapp messages, upload
++ a bunch of third party python scripts to send whatsapp messages and upload
   pictures to Dropbox.
 
 ** Architecture
@@ -14,7 +14,7 @@ The design is heavily based on [[https://en.wikipedia.org/wiki/Observer_pattern]
 principle]], to minimize dependencies among components. Well, at least it was an
 attempt I made to implement the project with those principles in mind.
 
-*TODO*: block diagram with the flow of pictures here. Explain the interactions
+*TODO* block diagram with the flow of pictures here. Explain the interactions
 between live view and monitoring functionalities.
 
 *** Critique on the design
@@ -52,10 +52,10 @@ Interesting stuff:
 + it uses two callbacks to ask for a change in the capture rate, and for
   enabling / disabling the capture.
 
-** TODO MotionDetector
+** MotionDetector
 This class uses the [[http://opencv.org/][OpenCV]] library to examine the pictures flow and determines
-when there something moving. It implements the observer pattern to notify
-observers of the current state. The motion detection code is pretty simple:
+when there is something moving. It implements the observer pattern to notify the
+observers for the current state. The motion detection code is pretty simple:
 
 #+BEGIN_SRC c++
   cv::absdiff(curr_, p, currDiff_);
@@ -77,7 +77,7 @@ will be filtered out, since it's unlikely to stay among three frames and the
 image will be almost completely black. Whenever something moves however, certain
 areas of the pictures will differ in the three frames, and so the difference
 will produce white pixels. These pixels are then counted in ~motionHappened~,
-and if they reach a certain number, motion is detected.
+and if they reach a certain number, then some motion is detected.
 
 There is an additional layer of protection against errors, and it's a state
 machine that counts how many consecutive moving pictures have been detected.
@@ -86,7 +86,7 @@ These states are used to better control:
 + picture capturing
 + alarm notifications
 
-*** TODO diagram here
+*TODO* diagram here
 
 ** RecordingController
 This class is responsible of managing the registration of the pictures while an
@@ -176,10 +176,61 @@ certain amount of days is kept:
   });
 #+END_SRC
 
-** TODO PictureArchive
-** TODO DropboxUploader
-** TODO Whatsapp notifications
-** TODO Mail notifications
+** PictureArchive
+This class saves pictures in Jpeg format to a given folder. It takes a stream of
+pictures, and two commands, ~startSaving~ and ~stopSaving~. When the recording
+is started, not only the next picture is saved, but also some of the previous.
+This objects has indeed a fixed sized circular buffer that allows to
+retroactively save images right before an alarm pops up. It also allows
+observers to register for when a picture is saved to disk, getting the file
+name.
+
+#+BEGIN_SRC c++
+  void PictureArchive::save(Picture& p, Clock t)
+  {
+      std::string filename{ fs::concatPaths(currentFolder_,
+          text::toString(t, text::ToStringFormat::FULL, '-', '_') + ".jpg")};
+
+      cv::putText(p, text::toString(t, text::ToStringFormat::SHORT, '/', ' '),
+                  cv::Point(30,30), CV_FONT_HERSHEY_COMPLEX_SMALL, 0.8,
+                  cv::Scalar(200,200,250), 1, CV_AA);
+      cv::imwrite(filename, p, {CV_IMWRITE_JPEG_QUALITY, 90});
+      notifyObservers(filename);
+  }
+#+END_SRC
+
+The picture gets an overlapping timestamp on the top left corner and then are
+saved on the disk.
+
+Notes:
++ the ring buffer is very crappy
+
+** DropboxUploader
+This class is responsible for uploading files to a Dropbox account, by using an
+external =dropbox_uploader.sh= script. It just generates a configure file for
+Dropbox uploader starting from the Antifurto's configuration, and uploads a file
+when requested, by launching an external process.
+
+** WhatsappNotifier
+This class manages Whatsupp notifications. Whenever ~send(std::string const&
+dest, std::string const& msg)~ is called, it sends a message with [[https://github.com/mbrt/yowsup][yowsup-cli]] by
+spawning an external process. This class just generates the configuration file
+needed by Yowsup from the main process configuration and takes care of its
+execution.
+
+** MailNotifier
+This class is responsible to send e-mails.
+
+#+BEGIN_SRC c++
+  void send(ContactList const& dest,
+            std::string const& sender,
+            std::string const& subject,
+            std::string const& body);
+#+END_SRC
+
+It calls an external bash script that uses the Unix =mail= utility, to send the
+mail.
+
 ** CameraController
 This class is responsible to take pictures from a camera at a given rate. An
 user of this class can register an observer and specify the rate at which the
@@ -446,3 +497,53 @@ the result of the replacement will be:
 #+END_EXAMPLE
 
 Note that unknown variables are left untouched.
+
+* FastCGI backend
+One of the website backend components is ironically in a folder called
+=frontend=. The name is unfortunate but it was meant to suggest an interface to
+the main executable. It is an executable that communicates with the antifurto
+main executable via ZeroMQ, and with the web server through [[https://en.wikipedia.org/wiki/FastCGI][FastCGI]].
+
+In =main.cpp= there is all the logic:
++ A webserver request is directed to the executable through the standard input
+  (which is ignored);
++ a picture is requested to the main antifurto executable through a ZeroMQ
+  request;
++ as soon as a reply arrives, it is immediately written to the standard output,
+  so that it's caught by the web server.
+
+There are a bunch of utility classes that have been used to make the code
+cleaner.
+
+** ZmqLazyPirateClient
+This class implements the This class implements the [[http://zguide.zeromq.org/page:all#Client-Side-Reliability-Lazy-Pirate-Pattern][Lazy pirate pattern]] in
+ZeroMQ, which is a request-reply transition supporting socket reconnections.
+This allows to start and stop the main executable and this one independently.
+The connection between them will catch up automatically. When a request-reply
+transaction is needed, this class will send the request and wait until the
+reply, or a timeout expires. On timeout, the request is sent again, until the
+maximum number of retrials is reached. At that point the transaction is
+considered failed.
+
+** Stream utilities
+The ~StreamRedirector~ class is responsible of redirecting the standard input
+and output to FastCGI stream buffers, while ~StreamReader~ allows to buffer
+reads from a stream (in this case the standard input).
+
+* Website
+I am not so proud of the website code, and I don't recommend looking at it in
+detail. I did not have much experience in web development at that time, but I am
+still quite happy with the external result. The website is a bunch custom HTML +
+JavaScript pages. For the styling and the responsive design I went with the
+immortals [[http://getbootstrap.com/][Bootstrap]] and [[https://jquery.com/][JQuery]], while for the server side part I used the now
+infamous PHP.
+
++ commands for starting and stopping the monitoring, and for starting the live
+  view are requests to special PHP pages under the =controller/= path, that send
+  Posix signals to the main executable
++ the live view is an infinite series of ajax requests to the special =live.jpg=
+  image, which is served by the custom FastCGI backend at the server side
++ there is a simple archive with the pictured stored during the last days full
+  of PHP hacks.
+
+*TODO* Website screenshots, or maybe a demo?
