@@ -1,0 +1,55 @@
+#+TITLE: Antifurto: home-made security camera
+# to get rid of the '_' subscript problem
+#+OPTIONS: ^:{}
+
+* Introduction
+In February 2014 I had a very unpleasant surprise after coming back home from a
+weekend in Berlin. Me and my girlfriend found out our apartment upside down
+because of burglars. We suffered the loss not only of many of our belongings,
+but worse, of our safety. We didn't feel safe in our home and we didn't feel
+safe to leave it - not even for half an hour - for the fear to come back and
+find somebody inside. It was with this mood that I started this project: totally
+motivated to do something about it.
+
+My goal was to install in the apartment a security alarm that was cheap, safe
+and easy to use. Nowadays there are plenty of alternatives that satisfy all the
+requirements, but at that moment I couldn't find anything like that. As I'm a
+software engineer, I decided to jump into the project and spend most of my free
+time on it (my girlfriend was only partially happy with that).
+
+The end result was a Raspberry Pi with a camera module and a bunch of software,
+in part taken from the open-source and in part written by me. As of the time of
+writing, it's been running in production (namely my apartment) untouched for
+more than two years now. Ironically my security camera lasted way more than my
+apartment, because since then I moved twice already. So, quite a success for me.
+
+And, if you're asking yourself if I had any burglars again since then, the
+answer is no, luckily. But I had the opportunity to test it multiple times when
+my parents intruded my apartment without permission...
+
+** Why?
+At this point you can probably see my motivation behind the project, and also
+the target audience: I needed something cheap that I, and my girlfriend could
+use. This set of users was important for the design. It meant that the normal
+usage should be simple, because my girlfriend (who is not a developer) had to
+use it. The configuration and maintenance was however on me, so I didn't focus
+on make that simple.
+
+Today I'm open-sourcing the project. You can find it on GitHub under
+[[https://github.com/mbrt/antifurto][mbrt/antifurto]]. Why am I doing that now, and not before? Why not keeping it
+closed source? The project started to meet my needs, so I had no reason to open
+source something that was completely tied to my use case at the beginning.
+Nobody would have benefit from it. After some time however it grown up into a
+more featured product. So, since at the time I wasn't happy with my job, I
+considered starting a business and commercialize it. Long story short, getting
+funds for startups in Italy is quite hard, so I needed money from myself or my
+family. I then had to improve many parts of the project because I needed to
+scale out for multiple customers. It was not only my apartment anymore. In the
+meantime competitors started to jump out from nowhere before I even got started.
+I had an opportunity for a new job, so my motivation in the end sunk.
+
+At the end of the day, there isn't a commercial product, but there is a working
+prototype, and an interesting experience that could benefit other people. I
+decided to open-source it now, because I needed time to put together this
+writeup and cleanup some documentation. All boring things for me, so it took me
+quite some time.

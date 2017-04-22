@@ -4,6 +4,7 @@
 ** Motivations and intro
 *** why the project started
 *** what kind of problem is trying to solve
+*** for who is this for
 *** why opensource
 
 ** Architecture
