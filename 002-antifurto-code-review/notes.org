@@ -1,6 +1,12 @@
 #+TITLE: Antifurto notes
 
 * Overview
+** Motivations and intro
+*** why the project started
+*** what kind of problem is trying to solve
+*** why opensource
+
+** Architecture
 There are the following components in Antifurto:
 + =antifurto= executable, written in C++
 + =antifurto.fgci= executable, written in C++
@@ -9,12 +15,11 @@ There are the following components in Antifurto:
 + a bunch of third party python scripts to send whatsapp messages and upload
   pictures to Dropbox.
 
-** Architecture
 The design is heavily based on [[https://en.wikipedia.org/wiki/Observer_pattern][observers]], [[https://en.wikipedia.org/wiki/Type_erasure][type erasure]] and the [[https://en.wikipedia.org/wiki/Composition_over_inheritance][composite reuse
 principle]], to minimize dependencies among components. Well, at least it was an
 attempt I made to implement the project with those principles in mind.
 
-*TODO* block diagram with the flow of pictures here. Explain the interactions
+*NOTE* block diagram with the flow of pictures here. Explain the interactions
 between live view and monitoring functionalities.
 
 *** Critique on the design
@@ -86,7 +91,7 @@ These states are used to better control:
 + picture capturing
 + alarm notifications
 
-*TODO* diagram here
+*NOTE* diagram here
 
 ** RecordingController
 This class is responsible of managing the registration of the pictures while an
@@ -546,4 +551,4 @@ infamous PHP.
 + there is a simple archive with the pictured stored during the last days full
   of PHP hacks.
 
-*TODO* Website screenshots, or maybe a demo?
+*NOTE* Website screenshots here
