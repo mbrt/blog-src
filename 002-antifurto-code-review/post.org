@@ -53,3 +53,45 @@ prototype, and an interesting experience that could benefit other people. I
 decided to open-source it now, because I needed time to put together this
 writeup and cleanup some documentation. All boring things for me, so it took me
 quite some time.
+
+* Architecture
+The project architecture is simple. Everything lives inside a Raspberry Pi,
+period. There isn't a server component communicating with the camera, or
+anything else. This is not an ideal architecture from the security point of
+view, because all the keys, including SSL, Dropbox API secrets, e-mail
+passwords, etc are inside that box. It was the perfect solution for me, because
+instead of a device and a server to manage, I had only one device. Moreover, the
+development time was reduced because the architecture was simpler.
+
+This unfortunately cannot work out if you want to provide the project to your
+mother (assuming she's not a software developer). The Raspberry needs a non-zero
+amount of maintenance, to provide a minimum amount of security. This includes
+for example installing OS updates and rebooting the device periodically. The
+keys need to be safe guarded inside the Raspberry itself, and re-generated in
+case of leak. Again, this is not good if you want to do it properly, but I
+preferred to do something quick and get it working as fast as I could.
+
+Now for the details. The project is divided into three main parts:
++ the main =antifurto= executable (written in C++), which is responsible for the
+  monitoring and notifications;
++ a web server (Apache + PHP), that serves the website from which you can see
+  the images live, turn the monitoring on and off and view the archive;
++ a FastCGI component that serves as a bridge between lighttpd and the main
+  executable.
+
+There are also other small satellite components and scripts, such as:
++ a bash script to send emails with =mail=;
++ python scripts to send WhatsApp notifications and upload pictures to Dropbox.
+
+You can see below a diagram of the high level architecture:
+
+[[file:overview.svg]]
+
+As you can see, the pictures come from the camera module, and are processed by
+the =antifurto= main executable. This decides whether to store the pictures on
+the local hard drive (an SD card), and upload them on Dropbox. It also decides,
+when to send notifications via e-mail or WhatsApp messages. Whenever the
+webserver decides to start a live view, or control the monitoring start and
+stop, it sends a POSIC signal to the main process. This will in turn start
+sending the pictures over the =zmq= channel to the =antifurto.fcgi= component.
+It's only task is to forward them to the webserver via a fast FCGI socket.
