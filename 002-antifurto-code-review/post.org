@@ -36,23 +36,43 @@ use it. The configuration and maintenance was however on me, so I didn't focus
 on make that simple.
 
 Today I'm open-sourcing the project. You can find it on GitHub under
-[[https://github.com/mbrt/antifurto][mbrt/antifurto]]. Why am I doing that now, and not before? Why not keeping it
-closed source? The project started to meet my needs, so I had no reason to open
-source something that was completely tied to my use case at the beginning.
-Nobody would have benefit from it. After some time however it grown up into a
-more featured product. So, since at the time I wasn't happy with my job, I
-considered starting a business and commercialize it. Long story short, getting
-funds for startups in Italy is quite hard, so I needed money from myself or my
-family. I then had to improve many parts of the project because I needed to
-scale out for multiple customers. It was not only my apartment anymore. In the
-meantime competitors started to jump out from nowhere before I even got started.
-I had an opportunity for a new job, so my motivation in the end sunk.
+[[https://github.com/mbrt/antifurto][mbrt/antifurto]]. The name comes from an Italian word that means "security alarm".
+As I'm very lazy in finding names, the codename with which I started the project
+has remained till now.
 
-At the end of the day, there isn't a commercial product, but there is a working
-prototype, and an interesting experience that could benefit other people. I
-decided to open-source it now, because I needed time to put together this
-writeup and cleanup some documentation. All boring things for me, so it took me
-quite some time.
+Why am I open-sourcing that now, and not before? Why not keeping it closed
+source? The project started to meet my needs, so I had no reason at the
+beginning to open source something that was completely tied to my use case.
+Nobody would have gotten any particular benefit from it. After some time however
+it grown up into a more featured product. So, since at the time I wasn't happy
+with my job, I considered starting a business and commercialize it. Long story
+short, getting funds for startups in Italy is quite hard, so I needed money from
+myself or my family. I then had to improve many parts of the project because I
+needed to scale out for multiple customers. It was not only about my apartment
+anymore. In the meantime competitors started to jump out from nowhere before I
+even got started. I had an opportunity for a new job, so my motivations fell
+apart very rapidly.
+
+At the end of the day, there is not a commercial product, but a working
+prototype, and an interesting experience to share. I decided to open-source it
+now, because I needed time to put together this writeup and cleanup some
+documentation. All boring things for me, so it took me quite some time.
+
+** What?
+In this writeup I'm going to present the interesting bits of the project. I will
+try to not focus too much on the details, but rather to present clearly the
+high-level architecture, some design decisions and some interesting
+implementation bits.
+
+** Features
+The antifurto project is essentially a security camera that allows to monitor
+what happens through the lenses of a single camera. When the camera detects
+motion above a certain threshold, it sends notifications through WhatsApp and
+e-mail and starts to record pictures. These are in turn saved to the local disk
+and uploaded to a Dropbox folder. There is also a web portal from which you can
+start and stop the monitoring, a live view from which you can see images in real
+time and an archive page for the past recordings. It's not possible to combine
+multiple cameras together.
 
 * Architecture
 The project architecture is simple. Everything lives inside a Raspberry Pi,
@@ -89,9 +109,89 @@ You can see below a diagram of the high level architecture:
 
 As you can see, the pictures come from the camera module, and are processed by
 the =antifurto= main executable. This decides whether to store the pictures on
-the local hard drive (an SD card), and upload them on Dropbox. It also decides,
-when to send notifications via e-mail or WhatsApp messages. Whenever the
-webserver decides to start a live view, or control the monitoring start and
-stop, it sends a POSIC signal to the main process. This will in turn start
-sending the pictures over the =zmq= channel to the =antifurto.fcgi= component.
-It's only task is to forward them to the webserver via a fast FCGI socket.
+the local hard drive (an SD card), and upload them on Dropbox or not. It also
+decides, when to send notifications via e-mail or WhatsApp messages. Whenever
+from the web interface, the user decides to start a live view, or control the
+monitoring start and stop, it sends a POSIX signal to the main process. This
+will in turn start sending the pictures over the =zmq= channel to the
+=antifurto.fcgi= component. Its only task is to forward them to the webserver
+via a fast FCGI socket.
+
+The design is heavily based on [[https://en.wikipedia.org/wiki/Observer_pattern][observers]], [[https://en.wikipedia.org/wiki/Type_erasure][type erasure]] and the [[https://en.wikipedia.org/wiki/Composition_over_inheritance][composite reuse
+principle]], to minimize dependencies among components. Well, at least I tried to
+keep those in mind.
+
+* Main executable
+In this long section I'm going to talk about the internal details of the main
+executable, called =antifurto=, for a very lack of fantasy.
+
+** Main class
+The main class is called ~Antifurto~, what a surprise! It is responsible to
+start and stop the monitoring and the live view, by orchestrating the resources
+involved. It uses a ~Config~ structure for the configuration, that comes from
+the command line and the configuration file. It can be used as an external
+library, as most of the components in this project, since it is self contained.
+
+It contains all the controllers, that are described in the [[Controllers]] section,
+and the implementation details are hidden from the header file behind a [[https://herbsutter.com/gotw/_100/][Pimpl]].
+
+The interface is very simple: it takes a configuration and the user can control
+when to start and stop monitoring and live view from four public methods:
+
+#+BEGIN_SRC c++
+  class Antifurto
+  {
+  public:
+    Antifurto(const Configuration& c, bool maintenanceNeeded = true);
+
+    void startMonitoring();
+    void stopMonitoring();
+
+    void startLiveView();
+    void stopLiveView();
+
+  private:
+    meta::ErasedUniquePtr<AntifurtoImpl> pimpl_;
+  };
+#+END_SRC
+
+So, this class is all about the very high level use cases of configuring,
+starting and stopping the main functionalities.[fn:1]
+
+These functions are a bit less simple than one can at first imagine. For example
+the ~startMonitoring~ is anynchronous and starts the monitoring only after a
+configurable timeout. This is because after the start, the user may need to get
+out the way before the monitoring effectively starts. The default I'm using for
+myself is one minute. At the same time, the function needs to check if the user
+cancels the start request before the timer goes off. I needed to put some
+attention in the interaction between start, stop and the destructor. The camera
+controller (see the [[CameraController]] section for an overview) lifetime depends
+on whether one between the monitoring and the live view functionalities are on:
+
+#+BEGIN_SRC c++
+  void handleCameraControllerNeed()
+  {
+    if ((liveViewActive_ || monitorActive_) && !camera_)
+      camera_.reset(new CameraController());
+    else if (!liveViewActive_ && !monitorActive_)
+      camera_.reset();
+  }
+#+END_SRC
+
+This method is by all the four external methods, to factor out this common part.
+
+** Controllers
+In this section I'm going to describe the three controllers that manage the
+monitoring, live view and the camera sub-components.
+
+*** TODO MonitorController
+*** CameraController
+*** LiveViewController
+
+** Utility libraries
+*** meta namespace
+
+* Footnotes
+[fn:1]
+If you are curious, the ~ErasedUniquePtr~ class is briefly described in the [[meta
+namespace]] section.
