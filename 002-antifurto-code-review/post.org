@@ -184,10 +184,112 @@ This method is by all the four external methods, to factor out this common part.
 In this section I'm going to describe the three controllers that manage the
 monitoring, live view and the camera sub-components.
 
-*** TODO MonitorController
-*** CameraController
-*** LiveViewController
+*** MonitorController
+This class controls the monitoring functionality life cycle. It delegates to its
+sub-components tasks such as motion detection, and notifications. The most
+important part of its public interface is the ~examinePicture~ function:
 
+#+BEGIN_SRC c++
+  void examinePicture(const Picture& picture);
+#+END_SRC
+
+The [[Main class]] calls this function whenever a new picture comes out of the
+camera.
+
+Another interesting bit is the way this class asks for the upper level
+controller to change the picture capture interval, or to stop the recording
+altogether. To break cyclical dependencies, the upper level class has to
+instantiate the ~MonitorController~ by passing a couple of callbacks. One of
+them is the ~SetPicturesInterval~:
+
+#+BEGIN_SRC c++
+  using SetPicturesInterval = std::function<void(std::chrono::milliseconds)>;
+#+END_SRC
+
+that is used whenever some motion is detected. In that case, the
+~MonitorController~ asks for an increase of the capture frequency. It's also
+useful whenever nothing is going on, to decrease it and so save energy:
+
+#+BEGIN_SRC c++
+  void MonitorController::onAlarmStateChanged(MotionDetector::State state)
+  {
+    using State = MotionDetector::State;
+
+    switch (state) {
+    case State::NO_ALARM:
+      setPicturesInterval_(config::monitorCycleDuration());
+      break;
+    case State::PRE_ALARM:
+      setPicturesInterval_(config::monitorCycleDurationOnAlarm());
+      break;
+    default:
+      break;
+    }
+    log::info() << "Alarm state: " << state;
+  }
+#+END_SRC
+
+*** CameraController
+This class is responsible to take pictures from a camera at a given rate. An
+user of this class can register an observer and specify the rate at which the
+pictures have to be taken:
+
+#+BEGIN_SRC c++
+  class CameraController
+  {
+  public:
+    using Subject = meta::Subject<const Picture&>;
+    using Observer = Subject::Observer;
+    using Registration = Subject::Registration;
+    using Period = std::chrono::milliseconds;
+
+    /// Set the pictures capture rate
+    void setDesiredPeriod(Registration const& r, Period period);
+
+    /// Add an observer to the pictures flow
+    Registration addObserver(Observer observer, Period desiredPeriod);
+
+    // ...
+  };
+#+END_SRC
+
+This uses the observer pattern, implemented as an utility in the [[meta namespace.]]
+
+Every time a picture is taken, the observer callback is called. If multiple
+observers are interested in different capture rates, the maximum rate is used.
+This means that an observer specifies the minimum speed, but it could get
+pictures at a higher speed also, if others require that.
+
+To implement this functionality, in a separate thread a ~Metronome~ class sleeps
+the required time, and then the ~Camera~ class takes a picture. Every time an
+observer is registered or de-registered, the sleep time is updated.
+
+*** LiveViewController
+This class starts and stops the live view functionality. It doesn't implement
+the functionality itself; it just controls the lifetime of a [[LiveView]] object.
+From the outside it takes pictures and start and stop commands.
+
+Whenever a picture comes, it is forwarded to the internal ~LiveView~ object. To
+detect when the user is not interested in the live view anymore, I've built a
+primitive control flow, that is basically a buffer of pictures that are sent to
+the browser. When the client doesn't request them, the buffer fills up. After a
+certain timeout, the ~LiveViewController~ simply stops the live view:
+
+#+BEGIN_SRC c++
+  if (liveView_->addPicture(p))
+      lastPictureWrittenTime_ = system_clock::now();
+  else if (system_clock::now() - lastPictureWrittenTime_ > timeout_)
+      stop();
+#+END_SRC
+
+To do this, the internal ~LiveView~ object simply informs whether it has been
+able to process the image or not, and if not, the timeout is checked.
+
+The ~stop~ function invokes a callback, that asks to be de-registered from the
+stream of pictures.
+
+** TODO Picture capture
+** LiveView
 ** Utility libraries
 *** meta namespace
 
