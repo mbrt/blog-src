@@ -132,8 +132,9 @@ involved. It uses a ~Config~ structure for the configuration, that comes from
 the command line and the configuration file. It can be used as an external
 library, as most of the components in this project, since it is self contained.
 
-It contains all the controllers, that are described in the [[Controllers]] section,
-and the implementation details are hidden from the header file behind a [[https://herbsutter.com/gotw/_100/][Pimpl]].
+It contains all the controllers, that are described in the [[Main controllers]]
+section, and the implementation details are hidden from the header file behind a
+[[https://herbsutter.com/gotw/_100/][Pimpl]].
 
 The interface is very simple: it takes a configuration and the user can control
 when to start and stop monitoring and live view from four public methods:
@@ -180,7 +181,7 @@ on whether one between the monitoring and the live view functionalities are on:
 
 This method is by all the four external methods, to factor out this common part.
 
-** Controllers
+** Main controllers
 In this section I'm going to describe the three controllers that manage the
 monitoring, live view and the camera sub-components.
 
@@ -288,8 +289,257 @@ able to process the image or not, and if not, the timeout is checked.
 The ~stop~ function invokes a callback, that asks to be de-registered from the
 stream of pictures.
 
-** TODO Picture capture
+** Picture's capture
+*** MotionDetector
+This class uses the [[http://opencv.org/][OpenCV]] library to examine the pictures flow and determines
+when something is moving. It implements the observer pattern to notify the
+observers for the current state. The motion detection code is pretty simple:
+
+#+BEGIN_SRC c++
+  cv::absdiff(curr_, p, currDiff_);
+  cv::bitwise_and(prevDiff_, currDiff_, motion_);
+  if (motionHappened())
+      onMotionDetected();
+  else
+      onNoMotion();
+  // save
+  std::swap(prevDiff_, currDiff_);
+  curr_ = p;
+#+END_SRC
+
+The code works with three pictures: the current one and the two previous. Two
+images are computed out of them by making a difference (i.e. subtracting the
+gray values of the pixels one by one) between the first with the second and the
+second with the third. Then a bitwise and is computed between them. Random noise
+will be filtered out, since it's unlikely to stay still for three frames, and
+the image will be almost completely black. Whenever something moves however,
+certain areas of the pictures will differ among the three frames, and so the
+difference will produce white pixels. These pixels are then counted in
+~motionHappened()~, and if they exceed a certain threshold, then motion is
+detected.
+
+There is an additional layer of protection against errors, and it's a state
+machine that counts how many consecutive moving pictures have been detected.
+These states are used to better control:
++ energy saving
++ picture capturing
++ alarm notifications
+
+[[file:motion-detector.svg]]
+
+Every time a transition occurs in this state machine, all the observers are
+notified. It will be up to them to take the right action.
+
+Everything starts from the =IDLE= state. Whenever some motion is detected, the
+state becomes =PRE_ALARM=. If no mor motion frames are detected, the state goes
+back to =IDLE=. If the motion continues however, the state machine transitions
+to =ALARM=. It stays there while the motion continues. When it stops, the state
+goes to the =STILL= state. This means that even though nothing is moving, for
+some time, the alert level is still on alarm. Indeed, if some motion happens
+again, the state turns immediately to =ALARM= again. If instead nothing happens
+for some time, the state goes back to =IDLE=.
+
+In this way we have decoupled the abstract states in which the system may be
+with the actions the various components have to take to respond.
+
+*** Camera
+The camera type is statically determined in =StaticConfig.hpp=. In the
+Raspberry-Pi case, there is a homegrown version implemented by ~PiCamera~ that
+uses a slightly modified version of the =picam= library, that I found [[http://robotblogging.blogspot.nl/2013/10/an-efficient-and-simple-c-api-for.html][here]]. This
+library is a simple interface on top of the Raspberry [[https://github.com/mbrt/userland][userland]] library I forked
+just to ease the build. To capture images outside the Raspberry world I instead
+opted for the [[http://opencv.org/][OpenCV]] library and implemented ~CvCamera~. Now, I have to admit
+that the ~CvCaptureRAII~ class might look a bit weird, but it was an attempt to
+implement the camera resource through [[https://en.wikipedia.org/wiki/Resource_acquisition_is_initialization][RAII]]. I took inspiration from Martinho
+Fernandez [[https://rmf.io/cxx11/rule-of-zero][rule of zero]] blog post and the [[http://scottmeyers.blogspot.nl/2014/03/a-concern-about-rule-of-zero.html][concern about the rule of zero]] by Scott
+Meyers. To discuss this in detail I would need an entire blog post in itself, so
+I'll just point you to these valuable resources. To be honest I'm not very
+satisfied by its look and feel now.
+
+With the same spirit I implemented the capture resource for ~PiCamera~, which is
+just a one liner:
+
+#+BEGIN_SRC c++
+  std::unique_ptr<CCamera, void(*)(CCamera*)> capture_;
+#+END_SRC
+
+It uses the non-so-well-known custom deleter feature of ~std::unique_ptr~.
+Again, look at Fernandez post for an explanation on why I didn't just
+implemented a stupid destructor for ~PiCamera~. Everything is handled
+automatically, since in the constructor I pass the resource, and the deleter
+function to be called in destruction (namely ~picam_stop_camera~):
+
+#+BEGIN_SRC c++
+  PiCamera::PiCamera(int width, int height)
+    : width_(width), height_(height)
+    , capture_(::picam_start_camera(width, height, 10, 1, false),
+               &::picam_stop_camera)
+  {
+    // ...
+  }
+#+END_SRC
+
+These two different implementations of the camera resource were not intended to
+be used at the same time: one was only for the Raspberry Pi hardware, and the
+other for PC's with USB cameras. For this reason I didn't introduce any common
+interface, and just used a compile time define and a ~typedef~ to switch between
+them:
+
+#+BEGIN_SRC c++
+  namespace antifurto {
+  namespace config {
+
+  #if defined(ANTIFURTO_RASPBERRY)
+      using Camera = antifurto::PiCamera;
+  #else
+      using Camera = antifurto::CvCamera;
+  #endif
+
+  }}
+#+END_SRC
+
+The code will simply refer to the ~antifurto::config::Camera~ type to get a
+capture resource. I just needed to make sure their public interface (i.e. the
+public methods) are the same, so the two classes could be used interchangeably.
+
+This trick is quite handy if you don't need runtime polymorphism, but honestly
+it's a bit overkill for this project.
+
 ** LiveView
+** Picture recording
+*** RecordingController
+This class is responsible for managing the registration of the pictures while an
+alarm is active. It accepts pictures with ~void addPicture(Picture p)~ and
+registers itself to the [[MotionDetector]] to know when to start and stop the
+recording. This is done by saving jpeg pictures on the local file system (by
+using [[PictureArchive]]) and uploading them to Dropbox (by using [[DropboxUploader]]).
+
+The state machine is quite simple:
+
+#+BEGIN_SRC c++
+  void RecordingController::onAlarmStateChanged(MotionDetector::State state)
+  {
+      using State = MotionDetector::State;
+      switch (state) {
+      case State::NO_MOTION:
+          archive_.stopSaving();
+          break;
+      case State::NO_ALARM:
+          enqueueOlderPictures();
+          break;
+      case State::ALARM:
+          archive_.startSaving();
+          break;
+      case State::PRE_ALARM:
+      default:
+          break;
+      }
+  }
+#+END_SRC
+
+Whenever the motion detector notifies this class about an alarm, it starts to
+save the pictures. When there is no motion involved (even if the alarm is still
+active), the recording is stopped.
+
+Saving pictures in real time is important, both on the disk and online. If there
+is a slow upload for any reason, the queue between the producer (the [[Camera]]) and
+the consumer (the uploader), grows. This would mean that by looking at the
+pictures online, the delay between capture and upload will grow more and more
+over time during alarms. To avoid this behavior, the queue size is limited, and
+whenever it's full, the coming pictures are queued in a secondary one:
+
+#+BEGIN_SRC c++
+  void RecordingController::onPictureSaved(const std::string& fileName)
+  {
+      if (!uploadWorker_.enqueue(fileName)) {
+          log::info() << "Failed to upload picture to Dropbox: queue is full";
+          std::unique_lock<std::mutex> lock(toUploadAfterQueueMutex_);
+          toUploadAfterQueue_.emplace(fileName);
+      }
+  }
+#+END_SRC
+
+This ensures a fixed maximum delay between capture and upload, just by skipping
+pictures now and then, when the queue is full. All the missing pictures are
+instead uploaded when the alarm is not active anymore (the ~case
+State::NO_ALARM:~ above):
+
+#+BEGIN_SRC c++
+  while (!toUploadAfterQueue_.empty()) {
+      if (uploadWorker_.enqueue(toUploadAfterQueue_.front()))
+          toUploadAfterQueue_.pop();
+      else
+          break;
+  }
+  // if the queue is not empty, we need to schedule another upload cycle
+  if (!toUploadAfterQueue_.empty()) {
+      log::info() << "Cannot empty the upload queue. Schedule a new upload";
+      scheduler_.scheduleAfter(std::chrono::minutes(10), [this] {
+            enqueueOlderPictures();
+      });
+   }
+#+END_SRC
+
+The logic is a bit brutal but it works. While there is still something to
+upload, it adds the pictures to the upload queue. If the queue gets full again,
+a new procedure is scheduled after 10 minutes.
+
+There is another maintenance procedure, to avoid a full hard drive. Every 24
+hours, older pictures are removed. Depending on the configuration, only a
+certain amount of days are kept:
+
+#+BEGIN_SRC c++
+  // schedule maintenance at every midnight
+  using namespace std::chrono;
+  auto maintenanceWork = [this] { performMaintenance(); };
+  scheduler_.scheduleAt(concurrency::tomorrow() + minutes(1), [=] {
+      performMaintenance();
+      scheduler_.scheduleEvery(hours(24), maintenanceWork);
+  });
+#+END_SRC
+
+*** PictureArchive
+This class saves pictures in Jpeg format to a given folder. It takes a stream of
+pictures and two commands: ~startSaving~ and ~stopSaving~. When the recording is
+started, not only the next picture is saved, but also some of the previous. This
+object has indeed a fixed sized circular buffer that allows to retroactively
+save the images right before an alarm popped up. It also allows observers to
+register for when a picture is saved to disk, getting the file name.
+
+This is the function that saves the pictures:
+
+#+BEGIN_SRC c++
+  void PictureArchive::save(Picture& p, Clock t)
+  {
+      std::string filename{ fs::concatPaths(currentFolder_,
+          text::toString(t, text::ToStringFormat::FULL, '-', '_') + ".jpg")};
+
+      cv::putText(p, text::toString(t, text::ToStringFormat::SHORT, '/', ' '),
+                  cv::Point(30,30), CV_FONT_HERSHEY_COMPLEX_SMALL, 0.8,
+                  cv::Scalar(200,200,250), 1, CV_AA);
+      cv::imwrite(filename, p, {CV_IMWRITE_JPEG_QUALITY, 90});
+      notifyObservers(filename);
+  }
+#+END_SRC
+
+The picture gets an overlapping timestamp on the top left corner and then are
+saved on the disk with the timestamp in the filename.
+
+On the bad side is the ring buffer, which is actually not a ring buffer at all.
+Pictures are pushed to the end of a vector. The beginning is then deleted by
+moving all the other elements at the previous index. Not pretty, not fast, but
+all in all it works. Moving to a proper circular buffer it's not very hard but I
+didn't feel like it because this wasn't a bottleneck.
+
+*** TODO DropboxUploader
+This class is responsible for uploading files to a Dropbox account, by using an
+external =dropbox_uploader.sh= script. It just generates a configure file for
+it, starting from the Antifurto's configuration, and uploads a file when
+requested, by launching an external process.
+
+*Talk about the external script*
+
+** Notifications
 ** Utility libraries
 *** meta namespace
 

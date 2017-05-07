@@ -154,7 +154,7 @@ not active (the ~case State::NO_ALARM:~ above):
           toUploadAfterQueue_.pop();
       else
           break;
-     }
+  }
   // if the queue is not empty, we need to schedule an upload after
   if (!toUploadAfterQueue_.empty()) {
       log::info() << "Cannot empty the upload queue. Schedule a new upload";
