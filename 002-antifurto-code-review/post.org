@@ -21,7 +21,7 @@ The end result was a Raspberry Pi with a camera module and a bunch of software,
 in part taken from the open-source and in part written by me. As of the time of
 writing, it's been running in production (namely my apartment) untouched for
 more than two years now. Ironically my security camera lasted way more than my
-apartment, because since then I moved twice already. So, quite a success for me.
+apartment, because since then I already moved twice. So, quite a success for me.
 
 And, if you're asking yourself if I had any burglars again since then, the
 answer is no, luckily. But I had the opportunity to test it multiple times when
@@ -37,8 +37,8 @@ on make that simple.
 
 Today I'm open-sourcing the project. You can find it on GitHub under
 [[https://github.com/mbrt/antifurto][mbrt/antifurto]]. The name comes from an Italian word that means "security alarm".
-As I'm very lazy in finding names, the codename with which I started the project
-has remained till now.
+It was a codename at the beginning, waiting to be changed in something better,
+but in the end I didn't bother. So antifurto is still the name today.
 
 Why am I open-sourcing that now, and not before? Why not keeping it closed
 source? The project started to meet my needs, so I had no reason at the
@@ -50,13 +50,13 @@ short, getting funds for startups in Italy is quite hard, so I needed money from
 myself or my family. I then had to improve many parts of the project because I
 needed to scale out for multiple customers. It was not only about my apartment
 anymore. In the meantime competitors started to jump out from nowhere before I
-even got started. I had an opportunity for a new job, so my motivations fell
-apart very rapidly.
+even got started. I had an opportunity for a new job, so my motivations kinda
+vaporized.
 
 At the end of the day, there is not a commercial product, but a working
 prototype, and an interesting experience to share. I decided to open-source it
 now, because I needed time to put together this writeup and cleanup some
-documentation. All boring things for me, so it took me quite some time.
+documentation. All things that I find boring, so it took me a while.
 
 ** What?
 In this writeup I'm going to present the interesting bits of the project. I will
@@ -69,10 +69,10 @@ The antifurto project is essentially a security camera that allows to monitor
 what happens through the lenses of a single camera. When the camera detects
 motion above a certain threshold, it sends notifications through WhatsApp and
 e-mail and starts to record pictures. These are in turn saved to the local disk
-and uploaded to a Dropbox folder. There is also a web portal from which you can
-start and stop the monitoring, a live view from which you can see images in real
-time and an archive page for the past recordings. It's not possible to combine
-multiple cameras together.
+and uploaded to a Dropbox folder. There is also a web portal (optimized for
+desktop and mobile browsers) from which you can start and stop the monitoring, a
+live view from which you can see images in real time and an archive page for the
+past recordings. It's not possible to combine multiple cameras together.
 
 * Architecture
 The project architecture is simple. Everything lives inside a Raspberry Pi,
@@ -95,27 +95,27 @@ Now for the details. The project is divided into three main parts:
 + the main =antifurto= executable (written in C++), which is responsible for the
   monitoring and notifications;
 + a web server (Apache + PHP), that serves the website from which you can see
-  the images live, turn the monitoring on and off and view the archive;
-+ a FastCGI component that serves as a bridge between lighttpd and the main
+  the live stream, turn the monitoring on and off and view the archive;
++ a FastCGI component that serves as a bridge between the webserver and the main
   executable.
 
 There are also other small satellite components and scripts, such as:
-+ a bash script to send emails with =mail=;
++ a bash script to send emails with the =mail= command;
 + python scripts to send WhatsApp notifications and upload pictures to Dropbox.
 
 You can see below a diagram of the high level architecture:
 
 [[file:overview.svg]]
 
-As you can see, the pictures come from the camera module, and are processed by
+As you can see, the pictures come from the camera module and are processed by
 the =antifurto= main executable. This decides whether to store the pictures on
 the local hard drive (an SD card), and upload them on Dropbox or not. It also
 decides, when to send notifications via e-mail or WhatsApp messages. Whenever
-from the web interface, the user decides to start a live view, or control the
-monitoring start and stop, it sends a POSIX signal to the main process. This
-will in turn start sending the pictures over the =zmq= channel to the
-=antifurto.fcgi= component. Its only task is to forward them to the webserver
-via a fast FCGI socket.
+from the web interface, the user decides to start a live view, or start/stop the
+monitoring, it sends a POSIX signal to the main process. If the desired action
+was to start the live view, the main executable will start to send the pictures
+over the =zmq= channel to the =antifurto.fcgi= component. Its only task is to
+forward them to the webserver via a fast FCGI socket.
 
 The design is heavily based on [[https://en.wikipedia.org/wiki/Observer_pattern][observers]], [[https://en.wikipedia.org/wiki/Type_erasure][type erasure]] and the [[https://en.wikipedia.org/wiki/Composition_over_inheritance][composite reuse
 principle]], to minimize dependencies among components. Well, at least I tried to
@@ -123,7 +123,7 @@ keep those in mind.
 
 * Main executable
 In this long section I'm going to talk about the internal details of the main
-executable, called =antifurto=, for a very lack of fantasy.
+executable, called =antifurto= for a very lack of fantasy.
 
 ** Main class
 The main class is called ~Antifurto~, what a surprise! It is responsible to
@@ -161,10 +161,10 @@ starting and stopping the main functionalities.[fn:1]
 
 These functions are a bit less simple than one can at first imagine. For example
 the ~startMonitoring~ is anynchronous and starts the monitoring only after a
-configurable timeout. This is because after the start, the user may need to get
-out the way before the monitoring effectively starts. The default I'm using for
-myself is one minute. At the same time, the function needs to check if the user
-cancels the start request before the timer goes off. I needed to put some
+configurable timeout. This is because after the start, the person may need to
+get out the way before the monitoring effectively starts. The default I'm using
+for myself is one minute. At the same time, the function needs to check if the
+user cancels the start request before the timer goes off. I needed to put some
 attention in the interaction between start, stop and the destructor. The camera
 controller (see the [[CameraController]] section for an overview) lifetime depends
 on whether one between the monitoring and the live view functionalities are on:
@@ -179,7 +179,8 @@ on whether one between the monitoring and the live view functionalities are on:
   }
 #+END_SRC
 
-This method is by all the four external methods, to factor out this common part.
+This method is called by all the four external methods, to factor out this
+common part.
 
 ** Main controllers
 In this section I'm going to describe the three controllers that manage the
@@ -254,7 +255,7 @@ pictures have to be taken:
   };
 #+END_SRC
 
-This uses the observer pattern, implemented as an utility in the [[meta namespace.]]
+This uses the observer pattern, implemented as an utility in the [[meta namespace]].
 
 Every time a picture is taken, the observer callback is called. If multiple
 observers are interested in different capture rates, the maximum rate is used.
