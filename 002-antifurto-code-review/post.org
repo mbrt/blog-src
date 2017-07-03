@@ -407,6 +407,38 @@ This trick is quite handy if you don't need runtime polymorphism, but honestly
 it's a bit overkill for this project.
 
 ** LiveView
+*** LiveViewController
+This class starts and stops the live view functionality. It doesn't implement
+the functionality itself; it just controls the lifetime of a ~LiveView~ object.
+From the outside it takes pictures and start and stop commands. Whenever a
+picture comes, the controller forwards it to the internal ~LiveView~ object,
+which in turn returns true if it has been able to process the picture. If the
+live view returns false continuously, after a timeout the view is stopped:
+
+#+BEGIN_SRC c++
+  if (liveView_->addPicture(p))
+      lastPictureWrittenTime_ = system_clock::now();
+  else if (system_clock::now() - lastPictureWrittenTime_ > timeout_)
+      stop();
+#+END_SRC
+
+The ~stop~ function invokes a callback, informing that the live view is not
+interested in the stream of pictures anymore, so it can be unregistered.
+
+*** LiveView
+Tis class is responsible to forward pictures to a [[http://zeromq.org/][ZeroMQ]] socket. It has a single
+producer / single consumer queue (see the [[concurrency]] section) and a worker
+thread to offload the communication.
+
+The interesting part about this class is the use of a non-blocking lock-free
+queue, that allows minimum interruption for the producer. Whenever the queue is
+full, the images are discarded, and the caller is notified, in order to make
+some control flow, without interrupting the images flow.
+
+For the communication to the webserver we use the [[http://zguide.zeromq.org/page:all#Ask-and-Ye-Shall-Receive][request-reply pattern]] in
+ZeroMQ. It's a simple protocol where at very request corresponds one reply, but
+it also supports disconnections between the two agents.
+
 ** Picture recording
 *** RecordingController
 This class is responsible for managing the registration of the pictures while an
@@ -532,18 +564,231 @@ moving all the other elements at the previous index. Not pretty, not fast, but
 all in all it works. Moving to a proper circular buffer it's not very hard but I
 didn't feel like it because this wasn't a bottleneck.
 
-*** TODO DropboxUploader
+*** DropboxUploader
 This class is responsible for uploading files to a Dropbox account, by using an
 external =dropbox_uploader.sh= script. It just generates a configure file for
 it, starting from the Antifurto's configuration, and uploads a file when
-requested, by launching an external process.
-
-*Talk about the external script*
+requested, by launching an external process. Nothing fancy here, I just forked
+[[https://github.com/andreafabrizi/Dropbox-Uploader][andreafabrizi/Dropbox-Uploader]].
 
 ** Notifications
 ** Utility libraries
-*** meta namespace
+Here I present some random notes on the utility namespaces that help with design
+patterns, concurrency, filesystem and logging. Some of them are a bit
+over-engineered but in hobby projects you also need to have some fun, don't you?
+:)
 
+*** meta namespace
+This namespace contains some generic patterns and algorithms that do not depend
+on the specific details of the project itself. In =Observer.hpp= you can find a
+generic implementation of the [[https://en.wikipedia.org/wiki/Observer_pattern][observer pattern]]. A ~Subject~ wants to provide
+observers the possibility to register for events. The class takes a variadic
+number of type parameters, that will be used in the notification. For example:
+
+#+BEGIN_SRC c++
+  Subject<int, float> s;
+  auto reg = s.registerObserver([](int a, float b) { print(a, b); });
+  s.notify(3, 3.14);
+#+END_SRC
+
+in this example we want to notify our observer with an integer and a float. To
+do that we just need to declare ~Subject~ with the right parameters. This will
+in turn be able to accept observers that respect the ~std::function<void(int,
+float)>~ signature.
+
+Interesting:
++ the registration returns a token that when goes out of scope unregisters the
+  observer automatically;
++ it is possible to register and unregister observers within notification
+  callbacks (re-entrant calls are supported).
+
+Other small utilities are also present, like ~ErasedUniquePtr~, that provides an
+unique pointer with an erased deleter. This is an useful workaround to a subtle
+problem when you want to forward declare a class and use it in an unique
+pointer. For more details see the [[https://akrzemi1.wordpress.com/2013/12/11/type-erasure-part-iii/][type erasure post]] of Andrzej's blog.
+
+*** fs
+This namespace contains simple path manipulation utilities to concatenate
+multiple paths with a single call:
+
+#+BEGIN_SRC c++
+  std::string p = fs::concatPaths("/var/log", bar, "file.txt");
+#+END_SRC
+
+This is similar to what ~boost::filesystem~ does, but in a more functional way.
+
+*** log
+This namespace contains logging utilities. The focus of this library was to
+provide a fast and simple logging without using macro shenanigans.
+
+You can use it with a call to a free function, that will return the proper
+logger:
+
+#+BEGIN_SRC c++
+  log::debug() << "my log here " << 15;
+#+END_SRC
+
+There is also a ~reload~ function. When a log rotation occurs it will simply
+close the old file (that has been rotated) and open a new file in the same
+place. Ignored log levels are implemented by returning a logger that writes to a
+~NullSink~, which simply does nothing. Interestingly cryptic is the
+implementation of an ~std::outstream~ that does nothing. You can find it in
+=log/NullStream.hpp=.
+
+*** concurrency
+This namespace contains some classes that deal with concurrency. An interesting
+one is ~SpScQueue~, that wraps a worker thread and allows to enqueue work items
+for it. The type of the work item is templated, to maximize reusability. The
+queue is a lock-free implementation that can be chosen at compile time among a
+fixed-size and a dynamically allocated one. The former is preferred in case the
+maximum queue size is known at compile time.
+
+As a side note I would like to add here that since the project deals with
+real-time data, avoiding dynamic allocations can be critical. We used fixed
+bound queues in all places for this reason.
+
+Another interesting class in this namespace is the ~TaskScheduler~. It provides
+the possibility to schedule tasks at certain time points, either one-shot or
+periodic:
+
+#+BEGIN_SRC c++
+  void scheduleAt(Clock::time_point t, Task w);
+  void scheduleAfter(Clock::duration d, Task w);
+  void scheduleEvery(Clock::duration d, Task w);
+#+END_SRC
+
+The work items are processed one after the other in a worker thread, so delays
+added by one task impact on the next ones. It is for this reason used only for
+short tasks.
+
+*** ipc
+This namespace contains classes related to child processes and inter-process
+communication. There is a ~forkAndCall~ function, that forks the process, calls
+a the given function and returns the function result by using the child process
+exit code:
+
+#+BEGIN_SRC c++
+  /// This function fork the process, calls the function in the child process,
+  /// wait for completion and returns the function return value.
+  ChildProcess forkAndCall(std::function<int()> f);
+#+END_SRC
+
+The child process itself can be killed or waited. In the latter case, the
+function return code will be returned.
+
+In this namespace there is also a ~NamedPipe~ class that provides Linux named
+pipes. The constructor creates a FIFO with the given file name, and the
+destructor removes it.
+
+There is also an interesting ~PosixSignalHandler~ class, that handles POSIX
+signals safely. You need to use it carefully though: initialize it at the
+beginning of the main function, before any thread creation, and register all the
+signal handlers as soon as possible, by using:
+
+#+BEGIN_SRC c++
+  void setSignalHandler(int signal, Handler h);
+#+END_SRC
+
+where an handler is a callback that takes the signal that just happened:
+
+#+BEGIN_SRC c++
+  using Handler = std::function<void(int)>;
+#+END_SRC
+
+The POSIX standard says that a lot of functions are not safe to be used within
+signal handlers. For example it's not possible to allocate heap memory and call
+many standard library functions. We need however to support arbitrary code
+execution in the handlers, so to workaround this we use a vector of atomic
+booleans, one for each possible signal. Whenever a signal is sent to the
+process, the handler flips the corresponding boolean to true. A separate thread
+polls that vector, and executes the registered handlers, if any were given. This
+allows the signal handler to return immediately and in a safe way:
+
+#+BEGIN_SRC c++
+  std::vector<std::atomic<bool>> signalsToBeHandled(SIGRTMAX);
+
+  void sigactionHandler(int sig, siginfo_t* , void* )
+  {
+    signalsToBeHandled[sig].store(true, std::memory_order_release);
+  }
+#+END_SRC
+
+and the user-defined handler is called asynchronously in a separate thread. This
+allows to execute arbitrary code.
+
+*** text
+In this namespace we have some string manipulation utilities, like ~toString~.
+This free function converts any list of printable objects in an ~std::string~,
+e.g.
+
+#+BEGIN_SRC c++
+  std::string s = text::toString("my ", std::string("s"), 15, true);
+#+END_SRC
+
+Allowing to both covert objects into strings and concatenate them, without the
+need of odd ~std::ostringstream~ objects all around the codebase.
+
+A ~TextReplace~ class allows to do replace variable occurrences in a text with
+user specified values. For example:
+
+#+BEGIN_SRC c++
+  std::ifstream f("file.txt");
+  std::ostringstream out;
+  text::TextReplace r;
+  r.addVariable("var", "X");
+  r.addVariable("foo", "BAR");
+  r.replaceVariables(f, out);
+#+END_SRC
+
+and suppose =file.txt= contains:
+
+#+BEGIN_EXAMPLE
+  replace ${var} variables
+  with ${foo} their values ${p}.
+#+END_EXAMPLE
+
+the result of the replacement will be:
+
+#+BEGIN_EXAMPLE
+  replace X variables
+  with BAR their values ${p}.
+#+END_EXAMPLE
+
+Note that unknown variables are left untouched.
+
+* FastCGI backend
+One of the website backend components is ironically in a folder called
+=frontend=. The name is unfortunate but it was meant to suggest an interface to
+the main executable. It communicates with it via a ZeroMQ socket, and with the
+web server through [[https://en.wikipedia.org/wiki/FastCGI][FastCGI]].
+
+The =main.cpp= contains all the logic:
++ A webserver request is directed to the executable through the standard input
+  (which is ignored);
++ a picture is requested to the main antifurto executable through a ZeroMQ
+  request;
++ as soon as a reply arrives, it is immediately written to the standard output,
+  that is read by the webserver.
+
+There are a bunch of utility classes that have been used to make the code
+cleaner, described in the following sections.
+
+** ZmqLazyPirateClient
+This class implements the [[http://zguide.zeromq.org/page:all#Client-Side-Reliability-Lazy-Pirate-Pattern][Lazy pirate pattern]] in ZeroMQ, which is a
+request-reply transition supporting socket reconnections. This allows to start
+and stop the main executable and the webserver independently. The connection
+between them will catch up automatically. When a request-reply transaction is
+needed, this class will send the request and wait until the reply, or a timeout
+expires. On timeout, the request is sent again, until the maximum number of
+retrials is reached. At that point the transaction is considered failed.
+
+** Stream utilities
+The ~StreamRedirector~ class is responsible of redirecting the standard input
+and output to FastCGI stream buffers, while ~StreamReader~ allows to buffer
+reads from a stream (in this case the standard input). I actually don't remember
+because it's a class instead of a simple function. Probably it's a non-sense.
+
+* Website
 * Footnotes
 [fn:1]
 If you are curious, the ~ErasedUniquePtr~ class is briefly described in the [[meta
