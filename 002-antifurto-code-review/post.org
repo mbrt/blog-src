@@ -756,11 +756,62 @@ the result of the replacement will be:
 
 Note that unknown variables are left untouched.
 
+* Website
+I am not so proud of the website code, and I don't recommend looking at it in
+detail. I did not have much experience in web development at that time, but I am
+still quite happy with the result. At that time it was not so obvious a website
+was mobile ready:
+
+[[file:web-screenshots/home.png]]
+
+[[file:web-screenshots/home-small.png]]
+
+The website is just a bunch HTML + JavaScript
+pages. For the styling and the responsive design I went with the immortals
+[[http://getbootstrap.com/][Bootstrap]] and [[https://jquery.com/][JQuery]], while for the server side part I used the now infamous
+PHP.
+
+Commands like start and stop monitoring and live view are issued by the frontend
+by doing =GET= requests to pages under the =controller/= path. The PHP backend
+listening that endpoint sends POSIX signals to the main executable. The
+communication is not more complicated than that, because this first
+implementation worked fine. I didn't bother changing it in something more
+complicated.
+
+The funniest part of the frontend is the live view though. Also in this case the
+first implementation was good enough :). Basically the frontend uses an infinite
+loop of Ajax requests[fn:2] to a special =live.jpg= picture, which is served by a
+custom FastCGI backend, written in C++. This is the one described in the
+[[FastCGI backend]] section.
+
+[[file:web-screenshots/live.png]]
+
+The archive page shows pictures from previous alarms. Just don't look at the PHP
+code behind that, it's really horrible crap. It can give you nightmares for days.
+
+[[file:web-screenshots/archive.png]]
+
+This is the carusel view:
+
+[[file:web-screenshots/archive-carusel.png]]
+
+This is the mobile version:
+
+[[file:web-screenshots/archive-small.png]]
+
+And this is the date selector for the alarm, in the mobile version:
+
+[[file:web-screenshots/archive-small-select.png]]
+
 * FastCGI backend
 One of the website backend components is ironically in a folder called
 =frontend=. The name is unfortunate but it was meant to suggest an interface to
 the main executable. It communicates with it via a ZeroMQ socket, and with the
 web server through [[https://en.wikipedia.org/wiki/FastCGI][FastCGI]].
+
+Interestingly enough, the first implementation was in Python, but it was too
+slow. I had to re-implement it in C++, and yes now it's about three orders of
+magnitude faster (yes, I really mean 1000X).
 
 The =main.cpp= contains all the logic:
 + A webserver request is directed to the executable through the standard input
@@ -788,8 +839,29 @@ and output to FastCGI stream buffers, while ~StreamReader~ allows to buffer
 reads from a stream (in this case the standard input). I actually don't remember
 because it's a class instead of a simple function. Probably it's a non-sense.
 
-* Website
+* Conclusion
+In this post we had a look at the pet project I had for a while, some years ago.
+By skimming it again I realized that the post is mostly a random collection of
+impressions, design decisions and code snippets, so I don't know how effective
+that is for a reader. However, for me it was important to wrap up, because after
+all the time and effort spent, I didn't want to forget myself, and also share
+with the community.[fn:3]
+
+My takeaways are that with this project I learned some stuff and I did something
+useful for myself. I would definitely recommend working on things you really
+need, as opposed to experimenting with technologies purposelessly. It really
+helps to get them done (to a certain extent at least) in the end. Or at least
+that's the only way I found that prevents me to give up projects too
+early.[fn:4]
+
 * Footnotes
-[fn:1]
-If you are curious, the ~ErasedUniquePtr~ class is briefly described in the [[meta
-namespace]] section.
+[fn:1] If you are curious, the ~ErasedUniquePtr~ class is briefly described in
+the [[meta namespace]] section.
+
+[fn:2] Yes, I know WebSocket existed already years ago, but really, at that time
+my phone didn't support them, and I didn't feel like developing two different
+protocols.
+
+[fn:3] The license is GPL.
+
+[fn:4] See [[http://250bpm.com/blog:50][do finish your stuff]] by Martin Sústrik.
