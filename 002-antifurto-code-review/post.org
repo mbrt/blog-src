@@ -572,6 +572,40 @@ requested, by launching an external process. Nothing fancy here, I just forked
 [[https://github.com/andreafabrizi/Dropbox-Uploader][andreafabrizi/Dropbox-Uploader]].
 
 ** Notifications
+Two types of notifications are supported: WhatsApp and emails. WhatsApp have
+been historically fighting against bots. For this reason the phone numbers I
+used as source for notifications have been banned. I don't recommend using it
+for this reason. A much more sane approach would have been to implement a
+Telegram bot instead, but at that time they didn't exist. Email notifications
+are instead much more safe and reliable to use. For those two functionalities we
+have two very similar controllers: ~WhatsappNotificationController~ and
+~MailNotificationController~, that register themselves to the [[MotionDetector]] and
+whenever there is an alarm, they try to use their counterpart
+(~WhatsappNotifier~ and ~MailNotifier~) to send the notifications
+asynchronously. They also take care of retrials in case of errors, and avoid
+sending too many of them in a short period of time, to avoid flooding the
+receivers.
+
+*** WhatsappNotifier
+This class manages WhatsApp notifications. Whenever ~send(std::string const&
+dest, std::string const& msg)~ is called, it sends a message with [[https://github.com/mbrt/yowsup][yowsup-cli]] by
+spawning an external process. This class just generates the configuration file
+needed by Yowsup from the main process configuration and takes care of its
+execution.
+
+*** MailNotifier
+This class is responsible for sending emails.
+
+#+BEGIN_SRC c++
+  void send(ContactList const& dest,
+            std::string const& sender,
+            std::string const& subject,
+            std::string const& body);
+#+END_SRC
+
+It calls an external bash script that uses the Unix =mail= utility, to send the
+mail.
+
 ** Utility libraries
 Here I present some random notes on the utility namespaces that help with design
 patterns, concurrency, filesystem and logging. Some of them are a bit
@@ -783,6 +817,46 @@ first implementation was good enough :). Basically the frontend uses an infinite
 loop of Ajax requests[fn:2] to a special =live.jpg= picture, which is served by a
 custom FastCGI backend, written in C++. This is the one described in the
 [[FastCGI backend]] section.
+
+#+BEGIN_SRC javascript
+  function loadImage(url, imageObj, target) {
+      imageObj.onload = function() {
+          target.setAttribute('src', this.src);
+          loadImage(url, imageObj, target);
+      };
+      imageObj.src = url + '?_=' + new Date().getTime();
+  }
+
+  $.ajax({ url: '../controller/live.php',
+           dataType: 'json',
+           cache: false
+         })
+      .done(function(data) {
+          if (data.result == 0) {
+              $('.live-container').html(
+                  '<img id="liveimg" class="img-responsive"></img>'
+              );
+              var img = document.getElementById('liveimg');
+              loadImage('live.jpg', img, new Image);
+          }
+          else
+              displayMessage('.live-container',
+                  '<h4>Ooops...</h4>' +
+                  '<p>' + data.log + '</p>',
+                  'alert-danger');
+      })
+      .fail(function(jqxhr, textStatus, errorThrown) {
+          displayMessage('.live-container',
+              '<h4>Ooops...</h4>' +
+              '<p>' + errorThrown + '</p>',
+              'alert-danger');
+      });
+#+END_SRC
+
+Yes, that's it. I didn't even have to shorten the code. Something that I
+couldn't explain myself here was that in ~loadImage~ I couldn't use JQuery,
+because it was much slower than the old style ~setAttribute~ and ~image.src =
+url~. So I decided to live with that.
 
 [[file:web-screenshots/live.png]]
 
