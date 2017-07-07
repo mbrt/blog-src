@@ -12,10 +12,11 @@ find somebody inside. It was with this mood that I started this project: totally
 motivated to do something about it.
 
 My goal was to install in the apartment a security alarm that was cheap, safe
-and easy to use. Nowadays there are plenty of alternatives that satisfy all the
-requirements, but at that moment I couldn't find anything like that. As I'm a
-software engineer, I decided to jump into the project and spend most of my free
-time on it (my girlfriend was only partially happy with that).
+and easy to use: something that I could trust. Nowadays there are plenty of
+alternatives that satisfy all the requirements, but at that moment I couldn't
+find anything like that. As I am a software engineer, I decided to jump into the
+project and spend most of my free time on it (my girlfriend was only partially
+happy with this resolution).
 
 The end result was a Raspberry Pi with a camera module and a bunch of software,
 in part taken from the open-source and in part written by me. As of the time of
@@ -25,7 +26,7 @@ apartment, because since then I already moved twice. So, quite a success for me.
 
 And, if you're asking yourself if I had any burglars again since then, the
 answer is no, luckily. But I had the opportunity to test it multiple times when
-my parents intruded my apartment without permission...
+my parents have intruded my apartment without permission...
 
 ** Why?
 At this point you can probably see my motivation behind the project, and also
@@ -68,19 +69,20 @@ implementation bits.
 The antifurto project is essentially a security camera that allows to monitor
 what happens through the lenses of a single camera. When the camera detects
 motion above a certain threshold, it sends notifications through WhatsApp and
-e-mail and starts to record pictures. These are in turn saved to the local disk
+emails and starts to record pictures. These are in turn saved to the local disk
 and uploaded to a Dropbox folder. There is also a web portal (optimized for
 desktop and mobile browsers) from which you can start and stop the monitoring, a
 live view from which you can see images in real time and an archive page for the
-past recordings. It's not possible to combine multiple cameras together.
+past recordings. It's not possible to combine multiple cameras together: single
+camera, single website.
 
 * Architecture
 The project architecture is simple. Everything lives inside a Raspberry Pi,
 period. There isn't a server component communicating with the camera, or
 anything else. This is not an ideal architecture from the security point of
-view, because all the keys, including SSL, Dropbox API secrets, e-mail
-passwords, etc are inside that box. It was the perfect solution for me, because
-instead of a device and a server to manage, I had only one device. Moreover, the
+view, because all the keys, including SSL, Dropbox API secrets, email passwords,
+etc are inside that box. It was the perfect solution for me, because instead of
+a device and a server to manage, I had only one device. Moreover, the
 development time was reduced because the architecture was simpler.
 
 This unfortunately cannot work out if you want to provide the project to your
@@ -110,48 +112,48 @@ You can see below a diagram of the high level architecture:
 As you can see, the pictures come from the camera module and are processed by
 the =antifurto= main executable. This decides whether to store the pictures on
 the local hard drive (an SD card), and upload them on Dropbox or not. It also
-decides, when to send notifications via e-mail or WhatsApp messages. Whenever
-from the web interface, the user decides to start a live view, or start/stop the
-monitoring, it sends a POSIX signal to the main process. If the desired action
-was to start the live view, the main executable will start to send the pictures
-over the =zmq= channel to the =antifurto.fcgi= component. Its only task is to
-forward them to the webserver via a fast FCGI socket.
+decides, when to send notifications via email or WhatsApp messages. Whenever the
+user decides to start a live view from the web interface, or start/stop the
+monitoring, the backend sends a POSIX signal to the main process. If the desired
+action was to start the live view, the main executable will start to send the
+pictures over the =zmq= channel to the =antifurto.fcgi= component. Its only task
+is to forward them to the webserver via an FCGI socket.
 
 The design is heavily based on [[https://en.wikipedia.org/wiki/Observer_pattern][observers]], [[https://en.wikipedia.org/wiki/Type_erasure][type erasure]], [[https://en.wikipedia.org/wiki/Composition_over_inheritance][composite reuse
-principle]] and [[https://en.wikipedia.org/wiki/SOLID_(object-oriented_design)][SOLID principles]] to minimize dependencies among components. Well,
+principle]] and [[https://en.wikipedia.org/wiki/SOLID_(object-oriented_design)][SOLID principles,]] to minimize dependencies among components. Well,
 at least I tried to keep those in mind.
 
 [[file:hierarchy.svg]]
 
 In the diagram you can see the architecture of the main executable. Each box
 represents a class. I didn't represent all of them, but only the most important.
-I left out the utility classes like schedulers, queues, observer lists, for
-example. The dark boxes represent controller classes. They are responsible for
-managing a specific part of the application. Controller classes manage all the
-boxes connected via a "tilted square" arrow. This means that they both own them
-(so they are responsible for their lifetime) and they know how to operate them.
-Red boxes don't manage anything, but they provide a functionality either for
-other classes or talk to external services.
+For example I left out the utility classes like schedulers, queues, observer
+lists. The dark boxes represent controller classes, which are responsible for
+managing specific parts of the application. Controller classes manage all the
+boxes connected via a "tilted square" arrow. This means that they both own those
+classes (so they are responsible for their lifetime) and they know how to
+operate them. Red boxes don't manage anything, but they provide a functionality
+either for other classes or talk to external services.
 
 One important thing to notice is that each class is owned by one and only one
 controller. The architecture and the lifetime of the resources are very simple
-and clear in this way. A consequence to this is that classes can be tested
-individually much more easily, since there are no cyclical dependencies, and
-children don't know anything about their parents.
+and clear in this way. A consequence is that classes can be tested individually
+much more easily, since there are no cyclical dependencies, and children don't
+know anything about their parents.
 
-In the diagram you can also see what are the input and output of each class. Red
-arrows are inputs, and dark arrows are outputs. You can see that I didn't
+In the diagram you can also see what are the inputs and outputs of each class.
+Red arrows are inputs, and dark arrows are outputs. You can see that I didn't
 connect explicitly those arrows. Why? Because they are loose connections.
-Outputs are provided in the form of observers [fn:1], and classes interested in
+Outputs are provided in the form of observers[fn:1], and classes interested in
 pictures don't know anything about the [[Camera]] class. So, controllers are
 responsible to "wire" those connections, by registering themselves to the inputs
 they need and forward them to the classes they manage. For example the
 [[RecordingController]] class register itself to both alarm notifications (provided
 by the [[MotionDetector]]) and the picture stream (provided by the [[Camera]]). It is
 managed by the [[MonitorController]], so whenever the monitoring functionality is
-stopped, it can safely delete it. The ~RecordingController~ then listens to
-alarm events and whenever one happens, it forwards the pictures stream directly
-to the [[PictureArchive]] and the [[DropboxUploader]].
+stopped, the recording classes can be safely deleted. The ~RecordingController~
+then listens to alarm events and whenever one occurs, it forwards the pictures
+stream directly to the [[PictureArchive]] and the [[DropboxUploader]].
 
 * Main executable
 In this long section I'm going to talk about the internal details of the main
@@ -197,9 +199,9 @@ configurable timeout. This is because after the start, the person may need to
 get out the way before the monitoring effectively starts. The default I'm using
 for myself is one minute. At the same time, the function needs to check if the
 user cancels the start request before the timer goes off. I needed to put some
-attention in the interaction between start, stop and the destructor. The camera
-controller (see the [[CameraController]] section for an overview) lifetime depends
-on whether one between the monitoring and the live view functionalities are on:
+attention in the interaction between start, stop and the destructor. The
+[[CameraController]] lifetime depends on whether one between the monitoring and the
+live view functionalities are on:
 
 #+BEGIN_SRC c++
   void handleCameraControllerNeed()
@@ -242,7 +244,8 @@ them is the ~SetPicturesInterval~:
 
 that is used whenever some motion is detected. In that case, the
 ~MonitorController~ asks for an increase of the capture frequency. It's also
-useful whenever nothing is going on, to decrease it and so save energy:
+useful whenever nothing is going on, to decrease the capture frequency and so
+save energy:
 
 #+BEGIN_SRC c++
   void MonitorController::onAlarmStateChanged(MotionDetector::State state)
@@ -264,8 +267,8 @@ useful whenever nothing is going on, to decrease it and so save energy:
 #+END_SRC
 
 *** CameraController
-This class is responsible to take pictures from a camera at a given rate. An
-user of this class can register an observer and specify the rate at which the
+This class is responsible to take pictures from a camera at a given rate. A user
+of this class can register an observer and specify the rate at which the
 pictures have to be taken:
 
 #+BEGIN_SRC c++
@@ -292,7 +295,7 @@ This uses the observer pattern, implemented as an utility in the [[meta namespac
 Every time a picture is taken, the observer callback is called. If multiple
 observers are interested in different capture rates, the maximum rate is used.
 This means that an observer specifies the minimum speed, but it could get
-pictures at a higher speed also, if others require that.
+pictures at a higher speed, if it's necessary for other observers.
 
 To implement this functionality, in a separate thread a ~Metronome~ class sleeps
 the required time, and then the ~Camera~ class takes a picture. Every time an
@@ -301,13 +304,14 @@ observer is registered or de-registered, the sleep time is updated.
 *** LiveViewController
 This class starts and stops the live view functionality. It doesn't implement
 the functionality itself; it just controls the lifetime of a [[LiveView]] object.
-From the outside it takes pictures and start and stop commands.
+From the outside it takes pictures and the start and stop commands.
 
 Whenever a picture comes, it is forwarded to the internal ~LiveView~ object. To
-detect when the user is not interested in the live view anymore, I've built a
-primitive control flow, that is basically a buffer of pictures that are sent to
-the browser. When the client doesn't request them, the buffer fills up. After a
-certain timeout, the ~LiveViewController~ simply stops the live view:
+detect when the user is not interested in the live view anymore, there is a
+primitive control flow, which is basically a fixed queue of pictures sent to the
+browser. When the client doesn't request them, the queue fills up. After a
+certain timeout with a full queue, the ~LiveViewController~ simply stops the
+live view:
 
 #+BEGIN_SRC c++
   if (liveView_->addPicture(p))
@@ -324,9 +328,9 @@ stream of pictures.
 
 ** Picture's capture
 *** MotionDetector
-This class uses the [[http://opencv.org/][OpenCV]] library to examine the pictures flow and determines
-when something is moving. It implements the observer pattern to notify the
-observers for the current state. The motion detection code is pretty simple:
+This class uses the [[http://opencv.org/][OpenCV]] library to examine the pictures flow and determine if
+something is moving. It implements the observer pattern to notify the observers
+for the current state. The motion detection code is pretty simple:
 
 #+BEGIN_SRC c++
   cv::absdiff(curr_, p, currDiff_);
@@ -340,23 +344,21 @@ observers for the current state. The motion detection code is pretty simple:
   curr_ = p;
 #+END_SRC
 
-The code works with three pictures: the current one and the two previous. Two
-images are computed out of them by making a difference (i.e. subtracting the
-gray values of the pixels one by one) between the first with the second and the
-second with the third. Then a bitwise and is computed between them. Random noise
-will be filtered out, since it's unlikely to stay still for three frames, and
-the image will be almost completely black. Whenever something moves however,
+The code works with three pictures: the current one and the last two. Two images
+are computed out of them by making a difference (i.e. subtracting the gray
+values of the pixels one by one) between the first with the second and the
+second with the third. Then a "bitwise and" is computed between them. Random
+noise will be filtered out, since it's unlikely to stay still for three frames,
+and the image will be almost completely black. Whenever something moves however,
 certain areas of the pictures will differ among the three frames, and so the
 difference will produce white pixels. These pixels are then counted in
 ~motionHappened()~, and if they exceed a certain threshold, then motion is
 detected.
 
 There is an additional layer of protection against errors, and it's a state
-machine that counts how many consecutive moving pictures have been detected.
-These states are used to better control:
-+ energy saving
-+ picture capturing
-+ alarm notifications
+machine that counts how many consecutive moving frames have been detected. These
+states are used to better control energy saving, picture capture and alarm
+notifications.
 
 [[file:motion-detector.svg]]
 
@@ -364,7 +366,7 @@ Every time a transition occurs in this state machine, all the observers are
 notified. It will be up to them to take the right action.
 
 Everything starts from the =IDLE= state. Whenever some motion is detected, the
-state becomes =PRE_ALARM=. If no mor motion frames are detected, the state goes
+state becomes =PRE_ALARM=. If no more motion frames are detected, the state goes
 back to =IDLE=. If the motion continues however, the state machine transitions
 to =ALARM=. It stays there while the motion continues. When it stops, the state
 goes to the =STILL= state. This means that even though nothing is moving, for
@@ -397,7 +399,7 @@ just a one liner:
 #+END_SRC
 
 It uses the non-so-well-known custom deleter feature of ~std::unique_ptr~.
-Again, look at Fernandez post for an explanation on why I didn't just
+Again, look at the Fernandez's post for an explanation on why I didn't just
 implemented a stupid destructor for ~PiCamera~. Everything is handled
 automatically, since in the constructor I pass the resource, and the deleter
 function to be called in destruction (namely ~picam_stop_camera~):
@@ -439,28 +441,9 @@ This trick is quite handy if you don't need runtime polymorphism, but honestly
 it's a bit overkill for this project.
 
 ** LiveView
-*** LiveViewController
-This class starts and stops the live view functionality. It doesn't implement
-the functionality itself; it just controls the lifetime of a ~LiveView~ object.
-From the outside it takes pictures and start and stop commands. Whenever a
-picture comes, the controller forwards it to the internal ~LiveView~ object,
-which in turn returns true if it has been able to process the picture. If the
-live view returns false continuously, after a timeout the view is stopped:
-
-#+BEGIN_SRC c++
-  if (liveView_->addPicture(p))
-      lastPictureWrittenTime_ = system_clock::now();
-  else if (system_clock::now() - lastPictureWrittenTime_ > timeout_)
-      stop();
-#+END_SRC
-
-The ~stop~ function invokes a callback, informing that the live view is not
-interested in the stream of pictures anymore, so it can be unregistered.
-
-*** LiveView
-Tis class is responsible to forward pictures to a [[http://zeromq.org/][ZeroMQ]] socket. It has a single
-producer / single consumer queue (see the [[concurrency]] section) and a worker
-thread to offload the communication.
+This class is managed by the [[LiveViewController]] and is responsible to forward
+pictures to a [[http://zeromq.org/][ZeroMQ]] socket. It has a single producer / single consumer queue
+(see the [[concurrency]] section) and a worker thread to offload the communication.
 
 The interesting part about this class is the use of a non-blocking lock-free
 queue, that allows minimum interruption for the producer. Whenever the queue is
@@ -468,15 +451,16 @@ full, the images are discarded, and the caller is notified, in order to make
 some control flow, without interrupting the images flow.
 
 For the communication to the webserver we use the [[http://zguide.zeromq.org/page:all#Ask-and-Ye-Shall-Receive][request-reply pattern]] in
-ZeroMQ. It's a simple protocol where at very request corresponds one reply, but
-it also supports disconnections between the two agents.
+ZeroMQ. It's a simple protocol where at very request corresponds one reply.
+Reconnections are implemented in the [[FastCGI backend]], with the
+[[ZmqLazyPirateClient]] class.
 
 ** Picture recording
 *** RecordingController
 This class is responsible for managing the registration of the pictures while an
-alarm is active. It accepts pictures with ~void addPicture(Picture p)~ and
-registers itself to the [[MotionDetector]] to know when to start and stop the
-recording. This is done by saving jpeg pictures on the local file system (by
+alarm is active. It accepts pictures with the ~void addPicture(Picture p)~
+method and registers itself to the [[MotionDetector]] to know when to start and stop
+the recording. This is done by saving Jpeg pictures on the local file system (by
 using [[PictureArchive]]) and uploading them to Dropbox (by using [[DropboxUploader]]).
 
 The state machine is quite simple:
@@ -506,8 +490,8 @@ Whenever the motion detector notifies this class about an alarm, it starts to
 save the pictures. When there is no motion involved (even if the alarm is still
 active), the recording is stopped.
 
-Saving pictures in real time is important, both on the disk and online. If there
-is a slow upload for any reason, the queue between the producer (the [[Camera]]) and
+Saving pictures in real time is important, both on disk and online. If there is
+a slow upload for any reason, the queue between the producer (the [[Camera]]) and
 the consumer (the uploader), grows. This would mean that by looking at the
 pictures online, the delay between capture and upload will grow more and more
 over time during alarms. To avoid this behavior, the queue size is limited, and
@@ -571,8 +555,6 @@ object has indeed a fixed sized circular buffer that allows to retroactively
 save the images right before an alarm popped up. It also allows observers to
 register for when a picture is saved to disk, getting the file name.
 
-This is the function that saves the pictures:
-
 #+BEGIN_SRC c++
   void PictureArchive::save(Picture& p, Clock t)
   {
@@ -587,14 +569,14 @@ This is the function that saves the pictures:
   }
 #+END_SRC
 
-The picture gets an overlapping timestamp on the top left corner and then are
-saved on the disk with the timestamp in the filename.
+The picture gets a timestamp text overlay on the top left corner and then is
+saved on disk.
 
-On the bad side is the ring buffer, which is actually not a ring buffer at all.
-Pictures are pushed to the end of a vector. The beginning is then deleted by
-moving all the other elements at the previous index. Not pretty, not fast, but
-all in all it works. Moving to a proper circular buffer it's not very hard but I
-didn't feel like it because this wasn't a bottleneck.
+On the bad side there is the ring buffer, which is actually not a ring buffer at
+all. Pictures are pushed to the end of a vector. The beginning is then deleted
+by moving all the other elements at the previous index. Not pretty, not fast,
+but all in all it works. Moving to a proper circular buffer should not be very
+hard.
 
 *** DropboxUploader
 This class is responsible for uploading files to a Dropbox account, by using an
@@ -613,7 +595,7 @@ are instead much more safe and reliable to use. For those two functionalities we
 have two very similar controllers: ~WhatsappNotificationController~ and
 ~MailNotificationController~, that register themselves to the [[MotionDetector]] and
 whenever there is an alarm, they try to use their counterpart
-(~WhatsappNotifier~ and ~MailNotifier~) to send the notifications
+([[WhatsappNotifier]] and [[MailNotifier]]) to send the notifications
 asynchronously. They also take care of retrials in case of errors, and avoid
 sending too many of them in a short period of time, to avoid flooding the
 receivers.
@@ -668,9 +650,9 @@ Interesting:
 + it is possible to register and unregister observers within notification
   callbacks (re-entrant calls are supported).
 
-Other small utilities are also present, like ~ErasedUniquePtr~, that provides an
-unique pointer with an erased deleter. This is an useful workaround to a subtle
-problem when you want to forward declare a class and use it in an unique
+Other small utilities are also present, like ~ErasedUniquePtr~, which provides
+a unique pointer with an erased deleter. This is an useful workaround to a
+subtle problem when you want to forward declare a class and use it in an unique
 pointer. For more details see the [[https://akrzemi1.wordpress.com/2013/12/11/type-erasure-part-iii/][type erasure post]] of Andrzej's blog.
 
 *** fs
@@ -743,7 +725,7 @@ The child process itself can be killed or waited. In the latter case, the
 function return code will be returned.
 
 In this namespace there is also a ~NamedPipe~ class that provides Linux named
-pipes. The constructor creates a FIFO with the given file name, and the
+pipes. The constructor creates a [[https://linux.die.net/man/3/mkfifo][FIFO]] with the given file name, and the
 destructor removes it.
 
 There is also an interesting ~PosixSignalHandler~ class, that handles POSIX
@@ -825,7 +807,7 @@ Note that unknown variables are left untouched.
 * Website
 I am not so proud of the website code, and I don't recommend looking at it in
 detail. I did not have much experience in web development at that time, but I am
-still quite happy with the result. At that time it was not so obvious a website
+still quite happy with the result. Year ago it was not so obvious that a website
 was mobile ready:
 
 [[file:web-screenshots/home.png]]
@@ -916,10 +898,10 @@ the main executable. It communicates with it via a ZeroMQ socket, and with the
 web server through [[https://en.wikipedia.org/wiki/FastCGI][FastCGI]].
 
 Interestingly enough, the first implementation was in Python, but it was too
-slow. I had to re-implement it in C++, and yes now it's about three orders of
+slow. I had to re-implement it in C++, and now it's about three orders of
 magnitude faster (yes, I really mean 1000X).
 
-The =main.cpp= contains all the logic:
+The =main.cpp= file contains all the logic:
 + A webserver request is directed to the executable through the standard input
   (which is ignored);
 + a picture is requested to the main antifurto executable through a ZeroMQ
@@ -933,41 +915,40 @@ cleaner, described in the following sections.
 ** ZmqLazyPirateClient
 This class implements the [[http://zguide.zeromq.org/page:all#Client-Side-Reliability-Lazy-Pirate-Pattern][Lazy pirate pattern]] in ZeroMQ, which is a
 request-reply transition supporting socket reconnections. This allows to start
-and stop the main executable and the webserver independently. The connection
+and stop the main executable and the webserver independently; the connection
 between them will catch up automatically. When a request-reply transaction is
-needed, this class will send the request and wait until the reply, or a timeout
-expires. On timeout, the request is sent again, until the maximum number of
-retrials is reached. At that point the transaction is considered failed.
+needed, this class will send the request and wait until the reply comes, or a
+timeout expires. On timeout, the request is sent again, until the maximum number
+of retrials is reached. At that point the transaction is considered failed.
 
 ** Stream utilities
-The ~StreamRedirector~ class is responsible of redirecting the standard input
+The ~StreamRedirector~ class is responsible for redirecting the standard input
 and output to FastCGI stream buffers, while ~StreamReader~ allows to buffer
 reads from a stream (in this case the standard input). I actually don't remember
 because it's a class instead of a simple function. Probably it's a non-sense.
 
 * Conclusion
-In this post we had a look at the pet project I had for a while, some years ago.
-By skimming it again I realized that the post is mostly a random collection of
-impressions, design decisions and code snippets, so I don't know how effective
-that is for a reader. However, for me it was important to wrap up, because after
-all the time and effort spent, I didn't want to forget it, and also wanted to
-share my insights with the community.[fn:4]
+In this post we had a look at the pet project I worked on for a while some years
+ago. By skimming through this post again I realized that it is mostly a random
+collection of impressions, design decisions and code snippets, so I don't know
+how effective that is for a reader. However, for me it was important to wrap up,
+because after all the time and effort spent, I didn't want to forget it, and I
+also wanted to share my insights with the community.[fn:4]
 
 My takeaways are that with this project I learned some stuff and I did something
 useful for myself. I would definitely recommend working on things you really
 need, as opposed to experimenting with technologies purposelessly. It really
-helps to get them done (to a certain extent at least) in the end. Or at least
-that's the only way I found that prevents me to give up projects too
-early.[fn:5]
+helps to get them done (to a certain extent at least). Or at least that's the
+only way I found preventing me to give up projects too early.[fn:5]
 
-I hope this post gave you some interesting insights into the project and maybe
-inspire you some extensions, related projects or ideas. The code is open source
-on GitHub, under [[https://github.com/mbrt/antifurto][mbrt/antifurto]], as I wrote earlier. I encourage you to take a
-look yourself to some of the classes. You can also build it and use it as is for
-your own security alarm. The deployment is kind of a pain right now, because
-there are many dependencies and configuring the external services is not exactly
-easy to do (Dropbox, mails, WhatsApp, etc). The documentation is also somehow
-lacking; apologies for that.
+I hope this post gave you some interesting insights and maybe inspire you some
+extensions, related projects or ideas. The code is open source on GitHub, under
+[[https://github.com/mbrt/antifurto][mbrt/antifurto]], as I wrote earlier. I encourage you to take a look yourself to
+some of the classes. You can also build it and use it as is for your own
+security alarm. The deployment is kind of a pain right now, because there are
+many dependencies and configuring the external services is not exactly easy to
+do (Dropbox, mails, WhatsApp, etc). The documentation is also somehow lacking;
+apologies for that.
 
 That's all folks!
 
