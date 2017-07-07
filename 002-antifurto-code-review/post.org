@@ -117,9 +117,41 @@ was to start the live view, the main executable will start to send the pictures
 over the =zmq= channel to the =antifurto.fcgi= component. Its only task is to
 forward them to the webserver via a fast FCGI socket.
 
-The design is heavily based on [[https://en.wikipedia.org/wiki/Observer_pattern][observers]], [[https://en.wikipedia.org/wiki/Type_erasure][type erasure]] and the [[https://en.wikipedia.org/wiki/Composition_over_inheritance][composite reuse
-principle]], to minimize dependencies among components. Well, at least I tried to
-keep those in mind.
+The design is heavily based on [[https://en.wikipedia.org/wiki/Observer_pattern][observers]], [[https://en.wikipedia.org/wiki/Type_erasure][type erasure]], [[https://en.wikipedia.org/wiki/Composition_over_inheritance][composite reuse
+principle]] and [[https://en.wikipedia.org/wiki/SOLID_(object-oriented_design)][SOLID principles]] to minimize dependencies among components. Well,
+at least I tried to keep those in mind.
+
+[[file:hierarchy.svg]]
+
+In the diagram you can see the architecture of the main executable. Each box
+represents a class. I didn't represent all of them, but only the most important.
+I left out the utility classes like schedulers, queues, observer lists, for
+example. The dark boxes represent controller classes. They are responsible for
+managing a specific part of the application. Controller classes manage all the
+boxes connected via a "tilted square" arrow. This means that they both own them
+(so they are responsible for their lifetime) and they know how to operate them.
+Red boxes don't manage anything, but they provide a functionality either for
+other classes or talk to external services.
+
+One important thing to notice is that each class is owned by one and only one
+controller. The architecture and the lifetime of the resources are very simple
+and clear in this way. A consequence to this is that classes can be tested
+individually much more easily, since there are no cyclical dependencies, and
+children don't know anything about their parents.
+
+In the diagram you can also see what are the input and output of each class. Red
+arrows are inputs, and dark arrows are outputs. You can see that I didn't
+connect explicitly those arrows. Why? Because they are loose connections.
+Outputs are provided in the form of observers [fn:1], and classes interested in
+pictures don't know anything about the [[Camera]] class. So, controllers are
+responsible to "wire" those connections, by registering themselves to the inputs
+they need and forward them to the classes they manage. For example the
+[[RecordingController]] class register itself to both alarm notifications (provided
+by the [[MotionDetector]]) and the picture stream (provided by the [[Camera]]). It is
+managed by the [[MonitorController]], so whenever the monitoring functionality is
+stopped, it can safely delete it. The ~RecordingController~ then listens to
+alarm events and whenever one happens, it forwards the pictures stream directly
+to the [[PictureArchive]] and the [[DropboxUploader]].
 
 * Main executable
 In this long section I'm going to talk about the internal details of the main
@@ -157,7 +189,7 @@ when to start and stop monitoring and live view from four public methods:
 #+END_SRC
 
 So, this class is all about the very high level use cases of configuring,
-starting and stopping the main functionalities.[fn:1]
+starting and stopping the main functionalities.[fn:2]
 
 These functions are a bit less simple than one can at first imagine. For example
 the ~startMonitoring~ is anynchronous and starts the monitoring only after a
@@ -814,7 +846,7 @@ complicated.
 
 The funniest part of the frontend is the live view though. Also in this case the
 first implementation was good enough :). Basically the frontend uses an infinite
-loop of Ajax requests[fn:2] to a special =live.jpg= picture, which is served by a
+loop of Ajax requests[fn:3] to a special =live.jpg= picture, which is served by a
 custom FastCGI backend, written in C++. This is the one described in the
 [[FastCGI backend]] section.
 
@@ -918,24 +950,37 @@ In this post we had a look at the pet project I had for a while, some years ago.
 By skimming it again I realized that the post is mostly a random collection of
 impressions, design decisions and code snippets, so I don't know how effective
 that is for a reader. However, for me it was important to wrap up, because after
-all the time and effort spent, I didn't want to forget myself, and also share
-with the community.[fn:3]
+all the time and effort spent, I didn't want to forget it, and also wanted to
+share my insights with the community.[fn:4]
 
 My takeaways are that with this project I learned some stuff and I did something
 useful for myself. I would definitely recommend working on things you really
 need, as opposed to experimenting with technologies purposelessly. It really
 helps to get them done (to a certain extent at least) in the end. Or at least
 that's the only way I found that prevents me to give up projects too
-early.[fn:4]
+early.[fn:5]
+
+I hope this post gave you some interesting insights into the project and maybe
+inspire you some extensions, related projects or ideas. The code is open source
+on GitHub, under [[https://github.com/mbrt/antifurto][mbrt/antifurto]], as I wrote earlier. I encourage you to take a
+look yourself to some of the classes. You can also build it and use it as is for
+your own security alarm. The deployment is kind of a pain right now, because
+there are many dependencies and configuring the external services is not exactly
+easy to do (Dropbox, mails, WhatsApp, etc). The documentation is also somehow
+lacking; apologies for that.
+
+That's all folks!
 
 * Footnotes
-[fn:1] If you are curious, the ~ErasedUniquePtr~ class is briefly described in
+[fn:1] Take a look at the [[meta namespace]] for the implementation.
+
+[fn:2] If you are curious, the ~ErasedUniquePtr~ class is briefly described in
 the [[meta namespace]] section.
 
-[fn:2] Yes, I know WebSocket existed already years ago, but really, at that time
+[fn:3] Yes, I know WebSocket existed already years ago, but really, at that time
 my phone didn't support them, and I didn't feel like developing two different
 protocols.
 
-[fn:3] The license is GPL.
+[fn:4] The license is GPL.
 
-[fn:4] See [[http://250bpm.com/blog:50][do finish your stuff]] by Martin Sústrik.
+[fn:5] See [[http://250bpm.com/blog:50][do finish your stuff]] by Martin Sústrik.
