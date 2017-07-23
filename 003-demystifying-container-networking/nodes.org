@@ -1,0 +1,332 @@
+#+TITLE: Demystifying container networking
+
+* Steps
+** Create the rootfs
+*** Option 1: dnf
+With Fedora dnf:
+#+BEGIN_EXAMPLE
+  mkdir rootfs
+  sudo dnf -y \
+       --installroot=$PWD/rootfs \
+       --releasever=24 install \
+       @development-tools \
+       procps-ng \
+       python3 \
+       which \
+       iproute \
+       net-tools
+#+END_EXAMPLE
+
+*** alpine minimal rootfs
+Download a minimal alpine image:
+#+BEGIN_EXAMPLE
+  wget http://dl-cdn.alpinelinux.org/alpine/v3.6/releases/x86_64/alpine-minirootfs-3.6.2-x86_64.tar.gz
+  cd rootfs
+  tar xf ../alpine-minirootfs-3.6.2-x86_64.tar.gz
+#+END_EXAMPLE
+
+** Filesystem isolation
+*** chroot
+Execute inside the rootfs and fixup ~$PATH~ and the =/proc= filesystem.
+#+BEGIN_EXAMPLE
+  sudo chroot rootfs /bin/ash
+  export PATH=/bin:/usr/bin:/sbin
+  mount -t proc proc /proc
+#+END_EXAMPLE
+
+*** volumes
+To mount a volume into a container, you can use =nsenter=, usint the mount
+namespace and the =mount= command:
+#+BEGIN_EXAMPLE
+  nsenter --mount=/proc/$PID/ns/mnt \
+          mount --bind -o ro \
+          $PWD/readonlyfiles \
+          $PWD/rootfs/var/readonlyfiles
+#+END_EXAMPLE
+
+then inside the container you have the mounted files, as read-only, into
+=/var/readonlyfiles=.
+
+** Process isolation
+*** process namespace
+Instead of chroot only I'm going to isolate the processes with a process
+namespace:
+#+BEGIN_EXAMPLE
+  sudo unshare -p --mount-proc=$PWD/rootfs/proc -f \
+       chroot rootfs /bin/ash
+#+END_EXAMPLE
+
+Now, from inside the container you cannot see the outer processes:
+#+BEGIN_EXAMPLE
+  / # ps
+  PID   USER     TIME   COMMAND
+      1 root       0:00 /bin/ash
+      5 root       0:00 ps
+#+END_EXAMPLE
+
+But you can see it from the host:
+#+BEGIN_EXAMPLE
+  [root@mike-dell micheleb]# ps aux |grep ash
+  root      8552  0.0  0.0   1540   952 pts/3    S+   20:06   0:00 /bin/ash
+#+END_EXAMPLE
+
+Let's set a variable with this pid:
+#+BEGIN_EXAMPLE
+  CPID=8552
+#+END_EXAMPLE
+
+*** inspect the namespace
+To show the namespaces of that process you can look in the proc fileystem:
+#+BEGIN_EXAMPLE
+  [root@mike-dell micheleb]# ls -l /proc/8552/ns/
+  total 0
+  lrwxrwxrwx 1 root root 0 Jul 23 22:04 cgroup -> cgroup:[4026531835]
+  lrwxrwxrwx 1 root root 0 Jul 23 22:04 ipc -> ipc:[4026531839]
+  lrwxrwxrwx 1 root root 0 Jul 23 22:04 mnt -> mnt:[4026532350]
+  lrwxrwxrwx 1 root root 0 Jul 23 22:04 net -> net:[4026531973]
+  lrwxrwxrwx 1 root root 0 Jul 23 22:04 pid -> pid:[4026532351]
+  lrwxrwxrwx 1 root root 0 Jul 23 22:04 uts -> uts:[4026531838]
+#+END_EXAMPLE
+
+and see which ones are different w.r.t the host, for example for another bash
+shell:
+#+BEGIN_EXAMPLE
+  [root@mike-dell micheleb]# ls -l /proc/10608/ns/
+  total 0
+  lrwxrwxrwx 1 root root 0 Jul 23 22:05 cgroup -> cgroup:[4026531835]
+  lrwxrwxrwx 1 root root 0 Jul 23 22:05 ipc -> ipc:[4026531839]
+  lrwxrwxrwx 1 root root 0 Jul 23 22:05 mnt -> mnt:[4026531840]
+  lrwxrwxrwx 1 root root 0 Jul 23 22:05 net -> net:[4026531973]
+  lrwxrwxrwx 1 root root 0 Jul 23 22:05 pid -> pid:[4026531836]
+  lrwxrwxrwx 1 root root 0 Jul 23 22:05 uts -> uts:[4026531838]
+#+END_EXAMPLE
+
+In this case you can see that the mount and the pid namespaces are different,
+and the others are the same, as expected.
+
+*** enter the namespace
+To enter the namespace from the host, you can use the =nsenter= command. In this
+case we can try to enter the same mount and pid namespaces
+#+BEGIN_EXAMPLE
+  nsenter --pid=/proc/$CPID/ns/pid --mount=/proc/$CPID/ns/mnt chroot $PWD/rootfs /bin/ash
+#+END_EXAMPLE
+
+You can also enter the pid namespace without changing root:
+#+BEGIN_EXAMPLE
+  nsenter --pid=/proc/$CPID/ns/pid /bin/bash
+#+END_EXAMPLE
+
+In this way the process is in the same namespace, but in the terminal you have
+access to the host filesystem. Here is the list of processes from the container,
+with the new process:
+#+BEGIN_EXAMPLE
+  / # ps
+  PID   USER     TIME   COMMAND
+      1 root       0:00 /bin/ash
+      6 root       0:00 bash
+     12 root       0:00 ps
+#+END_EXAMPLE
+
+** Resources isolation
+*** cgroups
+cgroups are exposed through =/sys/fs/cgroup/=. We can create a new cgroup by
+creating a directory for example in the memory cgroup:
+#+BEGIN_EXAMPLE
+  [root@mike-dell micheleb]# mkdir /sys/fs/cgroup/memory/demo
+  [root@mike-dell micheleb]# ls /sys/fs/cgroup/memory/demo
+  cgroup.clone_children           memory.kmem.tcp.max_usage_in_bytes  memory.oom_control
+  cgroup.event_control            memory.kmem.tcp.usage_in_bytes      memory.pressure_level
+  cgroup.procs                    memory.kmem.usage_in_bytes          memory.soft_limit_in_bytes
+  memory.failcnt                  memory.limit_in_bytes               memory.stat
+  memory.force_empty              memory.max_usage_in_bytes           memory.swappiness
+  memory.kmem.failcnt             memory.memsw.failcnt                memory.usage_in_bytes
+  memory.kmem.limit_in_bytes      memory.memsw.limit_in_bytes         memory.use_hierarchy
+  memory.kmem.max_usage_in_bytes  memory.memsw.max_usage_in_bytes     notify_on_release
+  memory.kmem.slabinfo            memory.memsw.usage_in_bytes         tasks
+  memory.kmem.tcp.failcnt         memory.move_charge_at_immigrate
+  memory.kmem.tcp.limit_in_bytes  memory.numa_stat
+#+END_EXAMPLE
+
+and the kernel is going to fill this up with the right files already.
+
+To move a process into a cgroup we need to write the pid of that process into
+the =tasks= file, in that cgroup:
+#+BEGIN_EXAMPLE
+  [root@mike-dell micheleb]# echo $CPID >/sys/fs/cgroup/memory/demo/tasks
+#+END_EXAMPLE
+
+you can then inspect your cgroups by looking at the =cgroup= file in the proc
+filesystem and verify that we are in the right memory cgroup:
+#+BEGIN_EXAMPLE
+  / # cat /proc/self/cgroup
+  10:freezer:/
+  9:blkio:/
+  8:cpuset:/
+  7:pids:/user.slice/user-1170.slice/user@1170.service
+  6:devices:/user.slice
+  5:cpu,cpuacct:/user.slice
+  4:net_cls,net_prio:/
+  3:memory:/demo
+  2:perf_event:/
+  1:name=systemd:/user.slice/user-1170.slice/user@1170.service/gnome-terminal-server.service
+  0::/user.slice/user-1170.slice/user@1170.service/gnome-terminal-server.service
+#+END_EXAMPLE
+
+We can limit the amount of memory by changing the =memory.limit_in_bytes= and
+turn off swap (to avoid using disk):
+#+BEGIN_EXAMPLE
+  [root@mike-dell micheleb]# echo 1000000000 > /sys/fs/cgroup/memory/demo/memory.limit_in_bytes
+  [root@mike-dell micheleb]# echo 0 > /sys/fs/cgroup/memory/demo/memory.swappiness
+#+END_EXAMPLE
+
+to test that it's working we can allocate some memory until the process just
+dies:
+#+BEGIN_SRC python
+  import time
+
+  f = open('/dev/random', 'rb')
+  data = bytearray()
+
+  i = 0
+  while True:
+      data.extend(f.read(10000000))
+      i += 1
+      print("%dmb" % (i * 10,))
+      time.sleep(1)
+#+END_SRC
+
+*** prevent process to reassign cgroups
+We create a new cgroup namespace:
+#+BEGIN_EXAMPLE
+  [root@mike-dell micheleb]# unshare -C
+#+END_EXAMPLE
+
+and now the process thinks it is in the root cgroup:
+#+BEGIN_EXAMPLE
+  [root@mike-dell micheleb]# cat /proc/self/cgroup
+  10:freezer:/
+  9:blkio:/
+  8:cpuset:/
+  7:pids:/
+  6:devices:/
+  5:cpu,cpuacct:/
+  4:net_cls,net_prio:/
+  3:memory:/
+  2:perf_event:/
+  1:name=systemd:/
+  0::/
+#+END_EXAMPLE
+
+Unsharing from within the container is problematic, so we should start the
+container directly with =unshare -C=.
+
+*** cleanup the cgroup
+Before to remove the cgroup you need to reassign all the tasks into the root
+namespace and than you can remove it:
+#+BEGIN_EXAMPLE
+  [root@mike-dell micheleb]# echo 8552 >/sys/fs/cgroup/memory/tasks
+  [root@mike-dell micheleb]# rmdir /sys/fs/cgroup/memory/demo
+#+END_EXAMPLE
+
+*** mount the cgroup filesystem in the container (bonus)
+If you need the cgroup hierarchy in the container:
+#+BEGIN_SRC bash
+  mkdir -p /sys/fs/cgroup
+  mount -t tmpfs cgroup_root /sys/fs/cgroup
+  mkdir -p /sys/fs/cgroup/memory
+  mount -t cgroup memory -omemory /sys/fs/cgroup/memory
+#+END_SRC
+
+** Root capabilities
+*** capabilities
+We can enable certain superuser powers for certain programs. For example, to
+allow binding a privileged port:
+#+BEGIN_EXAMPLE
+  sudo setcap cap_net_bind_service+ep myprogram
+#+END_EXAMPLE
+
+Then the program will be able to listen port 80 without being root.
+#+BEGIN_EXAMPLE
+  $ getcap cap_net_bind_service+ep myprogram
+  myprogram = cap_net_bind_service+ep
+#+END_EXAMPLE
+
+to get the capabilities the current process has:
+#+BEGIN_EXAMPLE
+  [root@mike-dell micheleb]# capsh --print
+  Current: = cap_chown,cap_dac_override,cap_dac_read_search,cap_fowner,cap_fsetid,cap_kill,cap_setgid,cap_setuid,cap_setpcap,cap_linux_immutable,cap_net_bind_service,cap_net_broadcast,cap_net_admin,cap_net_raw,cap_ipc_lock,cap_ipc_owner,cap_sys_module,cap_sys_rawio,cap_sys_chroot,cap_sys_ptrace,cap_sys_pacct,cap_sys_admin,cap_sys_boot,cap_sys_nice,cap_sys_resource,cap_sys_time,cap_sys_tty_config,cap_mknod,cap_lease,cap_audit_write,cap_audit_control,cap_setfcap,cap_mac_override,cap_mac_admin,cap_syslog,cap_wake_alarm,cap_block_suspend,cap_audit_read+ep
+  Bounding set =cap_chown,cap_dac_override,cap_dac_read_search,cap_fowner,cap_fsetid,cap_kill,cap_setgid,cap_setuid,cap_setpcap,cap_linux_immutable,cap_net_bind_service,cap_net_broadcast,cap_net_admin,cap_net_raw,cap_ipc_lock,cap_ipc_owner,cap_sys_module,cap_sys_rawio,cap_sys_chroot,cap_sys_ptrace,cap_sys_pacct,cap_sys_admin,cap_sys_boot,cap_sys_nice,cap_sys_resource,cap_sys_time,cap_sys_tty_config,cap_mknod,cap_lease,cap_audit_write,cap_audit_control,cap_setfcap,cap_mac_override,cap_mac_admin,cap_syslog,cap_wake_alarm,cap_block_suspend,cap_audit_read
+  Securebits: 00/0x0/1'b0
+   secure-noroot: no (unlocked)
+   secure-no-suid-fixup: no (unlocked)
+   secure-keep-caps: no (unlocked)
+  uid=0(root)
+  gid=0(root)
+  groups=0(root),1(bin),2(daemon),3(sys),4(adm),6(disk),10(wheel),19(log)
+#+END_EXAMPLE
+
+a lot of things because I'm root.
+
+You can drop certain capabilities by using =capsh=:
+#+BEGIN_EXAMPLE
+  capsh --drop=cap_chown --
+#+END_EXAMPLE
+
+** TODO Networking isolation
+*** network namespace
+Enter the container but unshare the network namespace:
+#+BEGIN_EXAMPLE
+  [root@mike-dell micheleb]# sudo unshare -n chroot rootfs
+  # / ip addr
+  1: lo: <LOOPBACK> mtu 65536 qdisc noop state DOWN qlen 1000
+      link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+#+END_EXAMPLE
+
+Then bring the loopback device up:
+#+BEGIN_EXAMPLE
+  # / ip link set dev lo up
+  1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN qlen 1000
+      link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+      inet 127.0.0.1/8 scope host lo
+         valid_lft forever preferred_lft forever
+      inet6 ::1/128 scope host
+         valid_lft forever preferred_lft forever
+#+END_EXAMPLE
+
+*** veth
+Create the veth pair:
+#+BEGIN_EXAMPLE
+  ip link add veth0 type veth peer name veth1
+#+END_EXAMPLE
+
+Then inject one end into the namespace:
+#+BEGIN_EXAMPLE
+  ip link set veth1 netns $CPID
+#+END_EXAMPLE
+
+Then bring both ends up, in the host:
+#+BEGIN_EXAMPLE
+  ip link set dev veth0 up
+#+END_EXAMPLE
+
+and in the container:
+#+BEGIN_EXAMPLE
+  ip link set dev veth1 up
+#+END_EXAMPLE
+
+** User namespaces
+From a user shell (not root):
+#+BEGIN_EXAMPLE
+  $ unshare --map-root-user chroot rootfs
+  # / whoami
+  root
+#+END_EXAMPLE
+
+and the list of capabilities is big. But as soon as you try to interact with the
+host (e.g. listen to port 80), you get permission denied.
+
+Look at the real userid here:
+#+BEGIN_EXAMPLE
+  # / cat /proc/self/uid_map
+      0    1000
+#+END_EXAMPLE
