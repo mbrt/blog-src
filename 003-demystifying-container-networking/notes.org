@@ -21,6 +21,7 @@ With Fedora dnf:
 Download a minimal alpine image:
 #+BEGIN_EXAMPLE
   wget http://dl-cdn.alpinelinux.org/alpine/v3.6/releases/x86_64/alpine-minirootfs-3.6.2-x86_64.tar.gz
+  mkdir rootfs
   cd rootfs
   tar xf ../alpine-minirootfs-3.6.2-x86_64.tar.gz
 #+END_EXAMPLE
@@ -56,6 +57,15 @@ namespace:
        chroot rootfs /bin/ash
 #+END_EXAMPLE
 
+The =--mount-proc= option for some reason doens't work for me. We can workaround
+that by using two commands instead:
+
+#+BEGIN_EXAMPLE
+  sudo unshare -p -f chroot rootfs /bin/ash
+  export PATH=/bin:/usr/bin:/sbin
+  mount -t proc proc /proc
+#+END_EXAMPLE
+
 Now, from inside the container you cannot see the outer processes:
 #+BEGIN_EXAMPLE
   / # ps
@@ -74,6 +84,15 @@ Let's set a variable with this pid:
 #+BEGIN_EXAMPLE
   CPID=8552
 #+END_EXAMPLE
+
+*** mount namespace
+To isolate mountpoints we can add the =-m= flag to the =unshare= command:
+
+#+BEGIN_EXAMPLE
+  sudo unshare -p -m -f chroot rootfs /bin/ash
+#+END_EXAMPLE
+
+Then the mount namespace in =/proc/$CPID/mnt= will be different then the root one.
 
 *** inspect the namespace
 To show the namespaces of that process you can look in the proc fileystem:
@@ -127,6 +146,23 @@ with the new process:
      12 root       0:00 ps
 #+END_EXAMPLE
 
+** Fixing some issues
+*** PATH is empty
+The $PATH variable needs to be filled up, because the shell doesn't do it:
+#+BEGIN_EXAMPLE
+  export PATH=/bin:/usr/bin:/sbin
+#+END_EXAMPLE
+
+*** resolv.conf is missing
+With a missing resolv.conf you cannot resolve and install packages. To mount the
+host file do:
+#+BEGIN_EXAMPLE
+  mount --bind -o ro /etc/resolv.conf rootfs/etc/resolv.conf
+#+END_EXAMPLE
+
+This needs to be done before to start the container, otherwise the mount point
+will be not shared with it.
+
 ** Resources isolation
 *** cgroups
 cgroups are exposed through =/sys/fs/cgroup/=. We can create a new cgroup by
@@ -175,7 +211,7 @@ filesystem and verify that we are in the right memory cgroup:
 We can limit the amount of memory by changing the =memory.limit_in_bytes= and
 turn off swap (to avoid using disk):
 #+BEGIN_EXAMPLE
-  [root@mike-dell micheleb]# echo 1000000000 > /sys/fs/cgroup/memory/demo/memory.limit_in_bytes
+  [root@mike-dell micheleb]# echo 200000000 > /sys/fs/cgroup/memory/demo/memory.limit_in_bytes
   [root@mike-dell micheleb]# echo 0 > /sys/fs/cgroup/memory/demo/memory.swappiness
 #+END_EXAMPLE
 
@@ -184,15 +220,13 @@ dies:
 #+BEGIN_SRC python
   import time
 
-  f = open('/dev/random', 'rb')
   data = bytearray()
 
   i = 0
   while True:
-      data.extend(f.read(10000000))
+      data.extend([0] * 10000000)
       i += 1
       print("%dmb" % (i * 10,))
-      time.sleep(1)
 #+END_SRC
 
 *** prevent process to reassign cgroups
@@ -309,9 +343,53 @@ Then bring both ends up, in the host:
   ip link set dev veth0 up
 #+END_EXAMPLE
 
-and in the container:
+and in the container, first rename the interface and give it an IP, then bring
+it up. First of all get the IP:
 #+BEGIN_EXAMPLE
-  ip link set dev veth1 up
+  # / ip addr show dev veth1
+  1: veth1@if5: <BROADCAST,MULTICAST,UP,LOWER_UP,M-DOWN> mtu 1500 qdisc pfifo_fast state UP qlen 1000
+      link/ether 66:24:0c:01:91:3e brd ff:ff:ff:ff:ff:ff
+      inet6 fe80::6424:cff:fe01:913e/64 scope link
+         valid_lft forever preferred_lft forever
+#+END_EXAMPLE
+
+then rename the interface, giving it the right IP:
+#+BEGIN_EXAMPLE
+  ip link set dev veth1 name eth0 address 66:24:0c:01:91:3e
+#+END_EXAMPLE
+
+then give it an IPv4 and bring it up:
+#+BEGIN_EXAMPLE
+  ip addr add dev eth0 172.19.35.2/16
+  ip link set eth0 up
+#+END_EXAMPLE
+
+*** bridge
+To make it work locally, between the root network namespace and the contained
+one, we need a bridge and a TAP device:
+
+#+BEGIN_EXAMPLE
+  ip tuntap add tap0 mode tap user root
+  ip link set tap0 up
+  ip link add br0 type bridge
+  ip link set tap0 master br0
+  ip link set veth0 master br0
+  ip addr add dev br0 172.19.35.1/16
+  ip link set br0 up
+#+END_EXAMPLE
+
+then in the container, add a default route:
+#+BEGIN_EXAMPLE
+  ip route add default via 172.19.35.1
+#+END_EXAMPLE
+
+Then you can ping between the container and the host.
+
+*** routing
+From node002 let's try to reach the container subnet of node001:
+
+#+BEGIN_EXAMPLE
+  ip route add 172.19.35.0/24 via 10.141.0.1 src 10.141.0.2
 #+END_EXAMPLE
 
 ** User namespaces
