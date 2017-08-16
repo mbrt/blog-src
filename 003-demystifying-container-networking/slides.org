@@ -1,12 +1,76 @@
 #+TITLE: Demystifying container networking
+#+AUTHOR: Michele Bertasi
+#+REVEAL_ROOT: http://cdn.jsdelivr.net/reveal.js/3.0.0/
+#+REVEAL_TRANS: linear
+#+REVEAL_THEME: night
 
 * Introduction
-* rootfs
+...
+
+* The image
+** Prepare the root fs
+Download the mini root filesystem from the alpine website
 #+BEGIN_EXAMPLE
-  wget http://dl-cdn.alpinelinux.org/alpine/v3.6/releases/x86_64/alpine-minirootfs-3.6.2-x86_64.tar.gz
   mkdir rootfs
   cd rootfs
   tar xf ../alpine-minirootfs-3.6.2-x86_64.tar.gz
 #+END_EXAMPLE
 
-* pid namespace
+** chroot
+#+BEGIN_EXAMPLE
+  chroot rootfs /bin/ash
+  export PATH=/bin:/usr/bin:/sbin
+#+END_EXAMPLE
+
+then install some useful packages:
+#+BEGIN_EXAMPLE
+  apk add --no-cache python findmnt curl
+#+END_EXAMPLE
+
+* Containerize
+** chroot = isolation?
+#+BEGIN_EXAMPLE
+  ps aux
+  ip link
+#+END_EXAMPLE
+
+NO:
++ we still have access to all the processes
++ we can change the network configuration
++ reboot the machine
++ change the clock
++ consume all the resources
++ ...
+
+** unshare
+This will:
++ create new PID, mount and network namespaces
++ chroot
++ set important environment variables
+
+#+BEGIN_EXAMPLE
+  unshare -pmn -f chroot rootfs /usr/bin/env -i \
+      HOME=/root \
+      PATH=/bin:/usr/bin:/sbin:/usr/sbin \
+      /bin/ash -l
+#+END_EXAMPLE
+
+** verify isolation
+#+BEGIN_EXAMPLE
+  mount -t proc proc /proc
+  ps
+  ip link
+#+END_EXAMPLE
+
+* veth pair
+In the host:
+#+BEGIN_EXAMPLE
+
+#+END_EXAMPLE
+
+In the container:
+
+* end to end
+#+BEGIN_EXAMPLE
+  python -m SimpleHTTPServer 80
+#+END_EXAMPLE

@@ -306,7 +306,7 @@ You can drop certain capabilities by using =capsh=:
   capsh --drop=cap_chown --
 #+END_EXAMPLE
 
-** TODO Networking isolation
+** Networking isolation
 *** network namespace
 Enter the container but unshare the network namespace:
 #+BEGIN_EXAMPLE
@@ -360,7 +360,7 @@ then rename the interface, giving it the right IP:
 
 then give it an IPv4 and bring it up:
 #+BEGIN_EXAMPLE
-  ip addr add dev eth0 172.19.35.2/16
+  ip addr add dev eth0 172.19.35.2/24
   ip link set eth0 up
 #+END_EXAMPLE
 
@@ -386,10 +386,40 @@ then in the container, add a default route:
 Then you can ping between the container and the host.
 
 *** routing
+allow natting and IP forwarding in the machine:
+#+BEGIN_EXAMPLE
+  echo 1 > /proc/sys/net/ipv4/ip_forward
+#+END_EXAMPLE
+
+#+BEGIN_EXAMPLE
+  iptables -t nat -A POSTROUTING -o br0 -j MASQUERADE
+  iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+#+END_EXAMPLE
+
 From node002 let's try to reach the container subnet of node001:
 
 #+BEGIN_EXAMPLE
   ip route add 172.19.35.0/24 via 10.141.0.1 src 10.141.0.2
+#+END_EXAMPLE
+
+*** on the other host
+Everything like before. Except we have to change the IPs and routing rules.
+
+In the container:
+#+BEGIN_EXAMPLE
+  ip addr add dev eth0 172.19.35.2/24
+  ip route add default via 172.19.36.1
+#+END_EXAMPLE
+
+in the host 2:
+#+BEGIN_EXAMPLE
+  ip addr add dev br0 172.19.36.1/16
+  ip route add 172.19.35.0/24 via 10.141.0.1 src 10.141.0.2
+#+END_EXAMPLE
+
+in the host 1:
+#+BEGIN_EXAMPLE
+  ip route add 172.19.36.0/24 via 10.141.0.2 src 10.141.0.1
 #+END_EXAMPLE
 
 ** User namespaces
@@ -408,3 +438,19 @@ Look at the real userid here:
   # / cat /proc/self/uid_map
       0    1000
 #+END_EXAMPLE
+
+* Notes for the demo
+** Useful scripts
+To recreate the rootfs from a shared dir:
+#+BEGIN_SRC bash
+  #!/bin/bash
+  set -xe
+
+  from=/cm/shared/cont-demo/rootfs
+  dest=/root/rootfs
+
+  umount $dest/etc/resolv.conf || true
+  rm -rf $dest
+  mkdir -p $dest
+  rsync -a $from/ $dest/
+#+END_SRC
