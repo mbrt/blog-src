@@ -3,6 +3,8 @@
 #+REVEAL_ROOT: http://cdn.jsdelivr.net/reveal.js/3.0.0/
 #+REVEAL_TRANS: linear
 #+REVEAL_THEME: night
+#+XXX_REVEAL_EXTRA_CSS: ./presentation.css
+#+OPTIONS: toc:1
 
 * Introduction
 ...
@@ -24,7 +26,7 @@ Download the mini root filesystem from the alpine website
 
 then install some useful packages:
 #+BEGIN_EXAMPLE
-  apk add --no-cache python findmnt curl
+  apk add --no-cache python findmnt curl libcap bind-tools
 #+END_EXAMPLE
 
 * Containerize
@@ -55,22 +57,195 @@ This will:
       /bin/ash -l
 #+END_EXAMPLE
 
-** verify isolation
+** Verify isolation
+On the container:
 #+BEGIN_EXAMPLE
   mount -t proc proc /proc
   ps
   ip link
 #+END_EXAMPLE
 
-* veth pair
+On the host:
+#+BEGIN_EXAMPLE
+  ps aux |grep /bin/ash
+  CPID=$(ps -C ash -o pid= | tr -d ' ')
+#+END_EXAMPLE
+
+** Inspect the namespaces
+for the container:
+#+BEGIN_EXAMPLE
+  ls -l /proc/$CPID/ns/
+#+END_EXAMPLE
+
+for the host:
+#+BEGIN_EXAMPLE
+  ls -l /proc/$$/ns/
+#+END_EXAMPLE
+
+** nsenter
+To enter a namespace you can use =nsenter=:
+#+BEGIN_EXAMPLE
+  nsenter --net=/proc/$CPID/ns/net /bin/bash
+#+END_EXAMPLE
+
++ same network of the namespace
++ your host filesystem
+
+You can enter any combination of namespaces you want:
+#+BEGIN_EXAMPLE
+  nsenter --pid=/proc/$CPID/ns/pid \
+          --net=/proc/$CPID/ns/net \
+          --mnt=/proc/$CPID/ns/mnt \
+          /bin/bash
+  mount -t proc proc /proc
+  ps aux
+#+END_EXAMPLE
+
+* Networking
+** overview
+TODO: schema
+
+** isolated?
+The =resolv.conf= is required inside the container. From the host:
+#+BEGIN_EXAMPLE
+  mount --bind -o ro /etc/resolv.conf rootfs/etc/resolv.conf
+#+END_EXAMPLE
+
+then you need to restart the container (mount were isolated)
+
+#+BEGIN_EXAMPLE
+  ip link
+  ip link set dev lo up
+#+END_EXAMPLE
+
+** veth pair
+The veth pair is like an ethernet cable between namespaces.
+
 In the host:
 #+BEGIN_EXAMPLE
-
+  ip link add veth0 type veth peer name veth1
+  ip link set veth1 netns $CPID
+  ip link set dev veth0 up
 #+END_EXAMPLE
 
 In the container:
+#+BEGIN_EXAMPLE
+  ip addr
+  MAC=$(ip addr show dev eth0 | grep 'link/ether' | tr -s ' ' | cut -d' ' -f3)
+  ip link set dev veth1 name eth0 address $MAC
+  ip addr add dev eth0 172.19.35.2/24
+  ip link set eth0 up
+#+END_EXAMPLE
 
-* end to end
+** Tap
+We want a device in the root namespace that:
++ connects the containerized network with the physical
++ applies natting
+
+We can use a TAP. L2 device, gate to user space.
+
+#+BEGIN_EXAMPLE
+  ip tuntap add tap0 mode tap user root
+  ip link set tap0 up
+#+END_EXAMPLE
+
+** Bridge
+We need to connect one end of the veth with the tap:
+#+BEGIN_EXAMPLE
+  ip link add br0 type bridge
+  ip link set tap0 master br0
+  ip link set veth0 master br0
+#+END_EXAMPLE
+
+give it an address:
+#+BEGIN_EXAMPLE
+  ip addr add dev br0 172.19.35.1/16
+  ip link set br0 up
+#+END_EXAMPLE
+
+** Natting
+In the host, allow IP forwarding:
+#+BEGIN_EXAMPLE
+  echo 1 > /proc/sys/net/ipv4/ip_forward
+#+END_EXAMPLE
+
+and enable natting for the bridge and the interface:
+#+BEGIN_EXAMPLE
+  iptables -t nat -A POSTROUTING -o br0 -j MASQUERADE
+  iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+#+END_EXAMPLE
+
+** Reach the internet
+In the container, add a default route:
+#+BEGIN_EXAMPLE
+  ip route add default via 172.19.35.1
+#+END_EXAMPLE
+
+Then you can ping and resolve:
+#+BEGIN_EXAMPLE
+  ping 8.8.8.8
+  host google.com
+#+END_EXAMPLE
+
+Look at the routing and ARP tables:
+#+BEGIN_EXAMPLE
+  ip route
+  ip neigh
+#+END_EXAMPLE
+
+* Routing
+** In the same LAN
+From another node in the LAN, you can't ping for now, because it doesn't know
+how to reach the container IP.
+
+Routing table!
+#+BEGIN_EXAMPLE
+  ip route add 172.19.35.0/24 via 10.141.0.1 src 10.141.0.2
+#+END_EXAMPLE
+
+You could also run a webserver in the container:
 #+BEGIN_EXAMPLE
   python -m SimpleHTTPServer 80
 #+END_EXAMPLE
+
+and curl it from the other host:
+#+BEGIN_EXAMPLE
+  curl http://172.19.35.2
+#+END_EXAMPLE
+
+** Remote container
+We need to setup a container in another host in the same way, but using
+different IPs:
++ the bridge: 172.19.36.1/16
++ the container: 172.19.36.2/24
++ default route for the container: 172.19.36.1
+
+** New routing rules
+In the first host we still don't know how to get to the remote container.
+
+Routing table!
+#+BEGIN_EXAMPLE
+  ip route add 172.19.36.0/24 via 10.141.0.2 src 10.141.0.1
+#+END_EXAMPLE
+
+** End-to-end
+From the second container:
+#+BEGIN_EXAMPLE
+  ping 172.19.35.2
+  curl http://172.19.35.2
+  ip route
+  ip route get 172.19.35.2
+  ip neigh
+#+END_EXAMPLE
+
+** Results
+TODO: schema
+
+* Conclusions
++ Docker, Kubernetes, Calico, Flannel, ... are all nice tools
++ They build everything on top of Linux standard functionality
++ Understanding how Linux virtual networking
+
+Ah... this is not all:
++ cgroups, caps, user namespaces
++ overlay networks, ipvlan, vlan, macvlan, macvtap, team, ipsec, Open vSwitch
