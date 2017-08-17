@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Demystifying container networking</title>
+<meta name="author" content="(Michele Bertasi)"/>
+<style type="text/css">
+.underline { text-decoration: underline; }
+</style>
+<link rel="stylesheet" href="http://cdn.jsdelivr.net/reveal.js/3.0.0/css/reveal.css"/>
+
+<link rel="stylesheet" href="http://cdn.jsdelivr.net/reveal.js/3.0.0/css/theme/night.css" id="theme"/>
+
+
+<!-- If the query includes 'print-pdf', include the PDF print sheet -->
+<script>
+    if( window.location.search.match( /print-pdf/gi ) ) {
+        var link = document.createElement( 'link' );
+        link.rel = 'stylesheet';
+        link.type = 'text/css';
+        link.href = 'http://cdn.jsdelivr.net/reveal.js/3.0.0/css/print/pdf.css';
+        document.getElementsByTagName( 'head' )[0].appendChild( link );
+    }
+</script>
+</head>
+<body>
+<div class="reveal">
+<div class="slides">
+<section id="sec-title-slide"><h1 class="title">Demystifying container networking</h1><h2 class="author">Michele Bertasi</h2><p class="date">Created: 2017-08-17 Thu 18:45</p>
+</section>
+<section id="table-of-contents">
+<div id="table-of-contents">
+<h2>Table of Contents</h2>
+<div id="text-table-of-contents">
+<ul>
+<li><a href="#/slide-orgb9a108c">1. Introduction</a></li>
+<li><a href="#/slide-orgcb8835d">2. The image</a></li>
+<li><a href="#/slide-orge1fe3ef">3. Containerize</a></li>
+<li><a href="#/slide-orgbf7a8ee">4. Networking</a></li>
+<li><a href="#/slide-orgf121127">5. Routing</a></li>
+<li><a href="#/slide-org40f0df5">6. Conclusions</a></li>
+<li><a href="#/slide-org569f083">Questions?</a></li>
+</ul>
+</div>
+</div>
+</section>
+
+<section>
+<section id="slide-orgb9a108c">
+<h2 id="orgb9a108c"><span class="section-number-2">1</span> Introduction</h2>
+<ul>
+<li>Containers are a powerful concept</li>
+<li>Networking (especially SDN) is a complex topic</li>
+
+</ul>
+
+<p>
+Containers ♥ Networking
+</p>
+
+<ul>
+<li>Setup step-by-step container networking only by using Linux commands</li>
+<li>To understand better how they work</li>
+
+</ul>
+
+</section>
+</section>
+<section>
+<section id="slide-orgcb8835d">
+<h2 id="orgcb8835d"><span class="section-number-2">2</span> The image</h2>
+<div class="outline-text-2" id="text-2">
+</div></section>
+<section id="slide-orgfe1a127">
+<h3 id="orgfe1a127"><span class="section-number-3">2.1</span> Prepare the root fs</h3>
+<p>
+Download the mini root filesystem from the alpine website
+</p>
+<pre class="example">
+mkdir rootfs
+cd rootfs
+tar xf ../alpine-minirootfs-3.6.2-x86_64.tar.gz
+</pre>
+
+</section>
+<section id="slide-orgf436f19">
+<h3 id="orgf436f19"><span class="section-number-3">2.2</span> chroot</h3>
+<pre class="example">
+chroot rootfs /bin/ash
+export PATH=/bin:/usr/bin:/sbin
+</pre>
+
+<p>
+then install some useful packages:
+</p>
+<pre class="example">
+apk add --no-cache python findmnt curl libcap bind-tools
+</pre>
+
+</section>
+</section>
+<section>
+<section id="slide-orge1fe3ef">
+<h2 id="orge1fe3ef"><span class="section-number-2">3</span> Containerize</h2>
+<div class="outline-text-2" id="text-3">
+</div></section>
+<section id="slide-org153ec50">
+<h3 id="org153ec50"><span class="section-number-3">3.1</span> chroot = isolation?</h3>
+<pre class="example">
+ps aux
+ip link
+</pre>
+
+<p>
+NO:
+</p>
+<ul>
+<li>we still have access to all the processes</li>
+<li>we can change the network configuration</li>
+<li>reboot the machine</li>
+<li>change the clock</li>
+<li>consume all the resources</li>
+<li>&#x2026;</li>
+
+</ul>
+
+</section>
+<section id="slide-org78bf670">
+<h3 id="org78bf670"><span class="section-number-3">3.2</span> unshare</h3>
+<p>
+This will:
+</p>
+<ul>
+<li>create new PID, mount and network namespaces</li>
+<li>chroot</li>
+<li>set important environment variables</li>
+
+</ul>
+
+<pre class="example">
+unshare -pmn -f chroot rootfs /usr/bin/env -i \
+    HOME=/root \
+    PATH=/bin:/usr/bin:/sbin:/usr/sbin \
+    /bin/ash -l
+</pre>
+
+</section>
+<section id="slide-org337144d">
+<h3 id="org337144d"><span class="section-number-3">3.3</span> Verify isolation</h3>
+<p>
+On the container:
+</p>
+<pre class="example">
+mount -t proc proc /proc
+ps
+ip link
+</pre>
+
+<p>
+On the host:
+</p>
+<pre class="example">
+ps aux |grep /bin/ash
+CPID=$(ps -C ash -o pid= | tr -d ' ')
+</pre>
+
+</section>
+<section id="slide-orge4ed3fd">
+<h3 id="orge4ed3fd"><span class="section-number-3">3.4</span> Inspect the namespaces</h3>
+<p>
+for the container:
+</p>
+<pre class="example">
+ls -l /proc/$CPID/ns/
+</pre>
+
+<p>
+for the host:
+</p>
+<pre class="example">
+ls -l /proc/$$/ns/
+</pre>
+
+</section>
+<section id="slide-org8475a5a">
+<h3 id="org8475a5a"><span class="section-number-3">3.5</span> nsenter</h3>
+<p>
+To enter a namespace you can use <code>nsenter</code>:
+</p>
+<pre class="example">
+nsenter --net=/proc/$CPID/ns/net /bin/bash
+</pre>
+
+<ul>
+<li>same network of the namespace</li>
+<li>your host filesystem</li>
+
+</ul>
+
+<p>
+You can enter any combination of namespaces you want:
+</p>
+<pre class="example">
+nsenter --pid=/proc/$CPID/ns/pid \
+        --net=/proc/$CPID/ns/net \
+        --mount=/proc/$CPID/ns/mnt \
+        /bin/bash
+mount -t proc proc /proc
+ps aux
+</pre>
+
+</section>
+</section>
+<section>
+<section id="slide-orgbf7a8ee">
+<h2 id="orgbf7a8ee"><span class="section-number-2">4</span> Networking</h2>
+<div class="outline-text-2" id="text-4">
+</div></section>
+<section id="slide-org1d56c82">
+<h3 id="org1d56c82"><span class="section-number-3">4.1</span> Overview</h3>
+
+<div class="figure">
+<p><object type="image/svg+xml" data="general.svg" class="org-svg" width="100%" height="100%">
+Sorry, your browser does not support SVG.</object>
+</p>
+</div>
+
+</section>
+<section id="slide-orgf8610dc">
+<h3 id="orgf8610dc"><span class="section-number-3">4.2</span> Isolated?</h3>
+<p>
+<code>resolv.conf</code> is required inside the container. From the host:
+</p>
+<pre class="example">
+mount --bind -o ro /etc/resolv.conf rootfs/etc/resolv.conf
+</pre>
+
+<p>
+then you need to restart the container (mount were isolated)
+</p>
+
+<pre class="example">
+ip link
+ip link set dev lo up
+</pre>
+
+</section>
+<section id="slide-org8a68b1d">
+<h3 id="org8a68b1d"><span class="section-number-3">4.3</span> Veth pair</h3>
+
+<div class="figure">
+<p><object type="image/svg+xml" data="detail-veth.svg" class="org-svg" width="80%" height="80%">
+Sorry, your browser does not support SVG.</object>
+</p>
+</div>
+
+</section>
+<section id="slide-org43279f6">
+<h3 id="org43279f6"><span class="section-number-3">4.4</span> Veth pair</h3>
+<p>
+The veth pair is like an ethernet cable between namespaces.
+</p>
+
+<p>
+In the host:
+</p>
+<pre class="example">
+ip link add veth0 type veth peer name veth1
+ip link set veth1 netns $CPID
+ip link set dev veth0 up
+</pre>
+
+<p>
+In the container:
+</p>
+<pre class="example">
+ip addr
+MAC=$(ip addr show dev veth1 | grep 'link/ether' | tr -s ' ' | cut -d' ' -f3)
+ip link set dev veth1 name eth0 address $MAC
+ip addr add dev eth0 172.19.35.2/24
+ip link set eth0 up
+</pre>
+
+</section>
+<section id="slide-org539a841">
+<h3 id="org539a841"><span class="section-number-3">4.5</span> Tap</h3>
+
+<div class="figure">
+<p><object type="image/svg+xml" data="detail-tap.svg" class="org-svg" width="80%" height="80%">
+Sorry, your browser does not support SVG.</object>
+</p>
+</div>
+
+</section>
+<section id="slide-orgdc76ce6">
+<h3 id="orgdc76ce6"><span class="section-number-3">4.6</span> Tap</h3>
+<p>
+We want a device in the root namespace that:
+</p>
+<ul>
+<li>connects the containerized network with the physical one</li>
+<li>applies natting</li>
+
+</ul>
+
+<p>
+We can use a TAP. L2 device, gate to user space.
+</p>
+
+<pre class="example">
+ip tuntap add tap0 mode tap user root
+ip link set tap0 up
+</pre>
+
+</section>
+<section id="slide-org7e5b6be">
+<h3 id="org7e5b6be"><span class="section-number-3">4.7</span> Bridge</h3>
+
+<div class="figure">
+<p><object type="image/svg+xml" data="detail-bridge.svg" class="org-svg" width="80%" height="80%">
+Sorry, your browser does not support SVG.</object>
+</p>
+</div>
+
+</section>
+<section id="slide-org19c82f0">
+<h3 id="org19c82f0"><span class="section-number-3">4.8</span> Bridge</h3>
+<p>
+We need to connect one end of the veth with the tap:
+</p>
+<pre class="example">
+ip link add br0 type bridge
+ip link set tap0 master br0
+ip link set veth0 master br0
+</pre>
+
+<p>
+give it an address:
+</p>
+<pre class="example">
+ip addr add dev br0 172.19.35.1/24
+ip link set br0 up
+</pre>
+
+</section>
+<section id="slide-orge47e091">
+<h3 id="orge47e091"><span class="section-number-3">4.9</span> Natting</h3>
+
+<div class="figure">
+<p><object type="image/svg+xml" data="detail-nat.svg" class="org-svg" width="80%" height="80%">
+Sorry, your browser does not support SVG.</object>
+</p>
+</div>
+
+</section>
+<section id="slide-orgcf85065">
+<h3 id="orgcf85065"><span class="section-number-3">4.10</span> Natting</h3>
+<p>
+In the host, allow IP forwarding:
+</p>
+<pre class="example">
+echo 1 &gt; /proc/sys/net/ipv4/ip_forward
+</pre>
+
+<p>
+and enable natting for the bridge and the interface:
+</p>
+<pre class="example">
+iptables -t nat -A POSTROUTING -o br0 -j MASQUERADE
+iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+</pre>
+
+</section>
+<section id="slide-org8887618">
+<h3 id="org8887618"><span class="section-number-3">4.11</span> Reach the internet</h3>
+<p>
+In the container, add a default route:
+</p>
+<pre class="example">
+ip route add default via 172.19.35.1
+</pre>
+
+<p>
+Then you can ping and resolve:
+</p>
+<pre class="example">
+ping 8.8.8.8
+host google.com
+</pre>
+
+<p>
+Look at the routing and ARP tables:
+</p>
+<pre class="example">
+ip route
+ip neigh
+</pre>
+
+</section>
+</section>
+<section>
+<section id="slide-orgf121127">
+<h2 id="orgf121127"><span class="section-number-2">5</span> Routing</h2>
+<div class="outline-text-2" id="text-5">
+</div></section>
+<section id="slide-org57d9ce9">
+<h3 id="org57d9ce9"><span class="section-number-3">5.1</span> Routing</h3>
+
+<div class="figure">
+<p><object type="image/svg+xml" data="detail-final.svg" class="org-svg" width="80%" height="80%">
+Sorry, your browser does not support SVG.</object>
+</p>
+</div>
+
+</section>
+<section id="slide-org8191404">
+<h3 id="org8191404"><span class="section-number-3">5.2</span> In the same LAN</h3>
+<p>
+From another node in the LAN, you can't ping because it doesn't know how to
+reach the container IP.
+</p>
+
+<pre class="example">
+ip route get 172.19.35.2
+ping 172.19.35.2
+</pre>
+
+<p>
+Routing table!
+</p>
+<pre class="example">
+ip route add 172.19.35.0/24 via 10.141.0.1 src 10.141.0.2
+</pre>
+
+<p>
+You could also run a webserver in the container:
+</p>
+<pre class="example">
+python -m SimpleHTTPServer 80
+</pre>
+
+<p>
+and curl it from the other host:
+</p>
+<pre class="example">
+curl http://172.19.35.2
+</pre>
+
+</section>
+<section id="slide-org2dd830e">
+<h3 id="org2dd830e"><span class="section-number-3">5.3</span> Remote container</h3>
+<p>
+We need to setup a container in another host in the same way, but using
+different IPs:
+</p>
+<ul>
+<li>the bridge: 172.19.36.1/24</li>
+<li>the container: 172.19.36.2/24</li>
+<li>default route for the container: 172.19.36.1</li>
+
+</ul>
+
+</section>
+<section id="slide-orgfaaa72f">
+<h3 id="orgfaaa72f"><span class="section-number-3">5.4</span> Remote container (I)</h3>
+<pre class="example">
+unshare -pmn -f chroot rootfs /usr/bin/env -i \
+    HOME=/root \
+    PATH=/bin:/usr/bin:/sbin:/usr/sbin \
+    /bin/ash -l
+</pre>
+
+<p>
+then in the host:
+</p>
+<pre class="example">
+CPID=$(ps -C ash -o pid= | tr -d ' ')
+ip link add veth0 type veth peer name veth1
+ip link set veth1 netns $CPID
+ip link set dev veth0 up
+ip tuntap add tap0 mode tap user root
+ip link set tap0 up
+ip link add br0 type bridge
+ip link set tap0 master br0
+ip link set veth0 master br0
+ip addr add dev br0 172.19.36.1/24
+ip link set br0 up
+echo 1 &gt; /proc/sys/net/ipv4/ip_forward
+iptables -t nat -A POSTROUTING -o br0 -j MASQUERADE
+iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+</pre>
+
+</section>
+<section id="slide-org82e9cf4">
+<h3 id="org82e9cf4"><span class="section-number-3">5.5</span> Remote container (II)</h3>
+<p>
+in the container:
+</p>
+<pre class="example">
+ip link set dev lo up
+MAC=$(ip addr show dev veth1 | grep 'link/ether' | tr -s ' ' | cut -d' ' -f3)
+ip link set dev veth1 name eth0 address $MAC
+ip addr add dev eth0 172.19.36.2/24
+ip link set eth0 up
+ip route add default via 172.19.36.1
+</pre>
+
+</section>
+<section id="slide-orgaac91de">
+<h3 id="orgaac91de"><span class="section-number-3">5.6</span> New routing rules</h3>
+<p>
+In the first host we still don't know how to get to the remote container.
+</p>
+
+<p>
+Routing table!
+</p>
+<pre class="example">
+ip route add 172.19.36.0/24 via 10.141.0.2 src 10.141.0.1
+</pre>
+
+</section>
+<section id="slide-orgd36fc54">
+<h3 id="orgd36fc54"><span class="section-number-3">5.7</span> End-to-end</h3>
+<p>
+From the second container:
+</p>
+<pre class="example">
+ping 172.19.35.2
+curl http://172.19.35.2
+ip neigh
+</pre>
+
+<p>
+From the second host:
+</p>
+<pre class="example">
+ip route
+ip route get 172.19.35.2
+ip neigh
+</pre>
+
+<p>
+Verify actual traffic from the first host:
+</p>
+<pre class="example">
+tcpdump -i any host 172.19.35.2
+</pre>
+
+</section>
+<section id="slide-org98aab37">
+<h3 id="org98aab37"><span class="section-number-3">5.8</span> End result</h3>
+
+<div class="figure">
+<p><object type="image/svg+xml" data="general.svg" class="org-svg" width="80%" height="80%">
+Sorry, your browser does not support SVG.</object>
+</p>
+</div>
+
+</section>
+</section>
+<section>
+<section id="slide-org40f0df5">
+<h2 id="org40f0df5"><span class="section-number-2">6</span> Conclusions</h2>
+<ul>
+<li>Docker, Kubernetes, Calico, Flannel, &#x2026; are all nice tools</li>
+<li>They build everything on top of Linux standard functionality</li>
+<li>Understanding how Linux virtual networking</li>
+
+</ul>
+
+<p>
+Ah&#x2026; this is not all:
+</p>
+<ul>
+<li>cgroups, caps, user namespaces</li>
+<li>overlay networks, ipvlan, vlan, macvlan, macvtap, team, ipsec</li>
+<li>&#x2026;</li>
+
+</ul>
+
+</section>
+</section>
+<section>
+<section id="slide-org569f083">
+<h2 id="org569f083">Questions?</h2>
+</section>
+</section>
+</div>
+</div>
+<script src="http://cdn.jsdelivr.net/reveal.js/3.0.0/lib/js/head.min.js"></script>
+<script src="http://cdn.jsdelivr.net/reveal.js/3.0.0/js/reveal.js"></script>
+
+<script>
+// Full list of configuration options available here:
+// https://github.com/hakimel/reveal.js#configuration
+Reveal.initialize({
+
+controls: true,
+progress: true,
+history: false,
+center: true,
+slideNumber: 'c',
+rollingLinks: false,
+keyboard: true,
+overview: true,
+
+theme: Reveal.getQueryHash().theme, // available themes are in /css/theme
+transition: Reveal.getQueryHash().transition || 'linear', // default/cube/page/concave/zoom/linear/fade/none
+transitionSpeed: 'default',
+multiplex: {
+    secret: '', // null if client
+    id: '', // id, obtained from socket.io server
+    url: '' // Location of socket.io server
+},
+
+// Optional libraries used to extend on reveal.js
+dependencies: [
+ { src: 'http://cdn.jsdelivr.net/reveal.js/3.0.0/lib/js/classList.js', condition: function() { return !document.body.classList; } },
+ { src: 'http://cdn.jsdelivr.net/reveal.js/3.0.0/plugin/markdown/marked.js', condition: function() { return !!document.querySelector( '[data-markdown]' ); } },
+ { src: 'http://cdn.jsdelivr.net/reveal.js/3.0.0/plugin/markdown/markdown.js', condition: function() { return !!document.querySelector( '[data-markdown]' ); } },
+ { src: 'http://cdn.jsdelivr.net/reveal.js/3.0.0/plugin/zoom-js/zoom.js', async: true, condition: function() { return !!document.body.classList; } },
+ { src: 'http://cdn.jsdelivr.net/reveal.js/3.0.0/plugin/notes/notes.js', async: true, condition: function() { return !!document.body.classList; } }]
+});
+</script>
+</body>
+</html>

@@ -422,6 +422,43 @@ in the host 1:
   ip route add 172.19.36.0/24 via 10.141.0.2 src 10.141.0.1
 #+END_EXAMPLE
 
+then we can test what happens when pinging from the first to the second container:
+#+BEGIN_EXAMPLE
+  ping -c1 172.19.36.2
+#+END_EXAMPLE
+
+From the first host we see this trace:
+#+BEGIN_EXAMPLE
+  [root@node001 ~]# tcpdump -i any host 172.19.36.2
+  18:14:55.857334 IP 172.19.35.2 > 172.19.36.2: ICMP echo request, id 24832, seq 0, length 64
+  18:14:55.857334 IP 172.19.35.2 > 172.19.36.2: ICMP echo request, id 24832, seq 0, length 64
+  18:14:55.857370 IP node001.cm.cluster > 172.19.36.2: ICMP echo request, id 24832, seq 0, length 64
+  18:14:55.858158 IP 172.19.36.2 > node001.cm.cluster: ICMP echo reply, id 24832, seq 0, length 64
+  18:14:55.858175 IP 172.19.36.2 > 172.19.35.2: ICMP echo reply, id 24832, seq 0, length 64
+  18:14:55.858181 IP 172.19.36.2 > 172.19.35.2: ICMP echo reply, id 24832, seq 0, length 64
+#+END_EXAMPLE
+
+and from the second:
+#+BEGIN_EXAMPLE
+  [root@node002 ~]# tcpdump -i any host 172.19.36.2
+  18:14:55.845622 IP node001.cm.cluster > 172.19.36.2: ICMP echo request, id 24832, seq 0, length 64
+  18:14:55.845678 IP 172.19.36.1 > 172.19.36.2: ICMP echo request, id 24832, seq 0, length 64
+  18:14:55.845684 IP 172.19.36.1 > 172.19.36.2: ICMP echo request, id 24832, seq 0, length 64
+  18:14:55.845834 IP 172.19.36.2 > 172.19.36.1: ICMP echo reply, id 24832, seq 0, length 64
+  18:14:55.845834 IP 172.19.36.2 > node001.cm.cluster: ICMP echo reply, id 24832, seq 0, length 64
+  18:14:55.845856 IP 172.19.36.2 > node001.cm.cluster: ICMP echo reply, id 24832, seq 0, length 64
+#+END_EXAMPLE
+
+the routing table of the first host looks like this now:
+#+BEGIN_EXAMPLE
+  [root@node001 ~]# ip r
+  default via 10.141.255.254 dev eth0
+  10.141.0.0/16 dev eth0  proto kernel  scope link  src 10.141.0.1
+  169.254.0.0/16 dev eth0  scope link  metric 1002
+  172.19.35.0/24 dev br0  proto kernel  scope link  src 172.19.35.1
+  172.19.36.0/24 via 10.141.0.2 dev eth0  src 10.141.0.1
+#+END_EXAMPLE
+
 ** User namespaces
 From a user shell (not root):
 #+BEGIN_EXAMPLE
