@@ -3,7 +3,6 @@
 #+REVEAL_ROOT: http://cdn.jsdelivr.net/reveal.js/3.0.0/
 #+REVEAL_TRANS: linear
 #+REVEAL_THEME: night
-#+XXX_REVEAL_EXTRA_CSS: ./presentation.css
 #+OPTIONS: toc:1
 
 * Introduction
@@ -101,7 +100,7 @@ You can enter any combination of namespaces you want:
 #+BEGIN_EXAMPLE
   nsenter --pid=/proc/$CPID/ns/pid \
           --net=/proc/$CPID/ns/net \
-          --mnt=/proc/$CPID/ns/mnt \
+          --mount=/proc/$CPID/ns/mnt \
           /bin/bash
   mount -t proc proc /proc
   ps aux
@@ -113,7 +112,7 @@ You can enter any combination of namespaces you want:
 [[file:general.svg]]
 
 ** Isolated?
-The =resolv.conf= is required inside the container. From the host:
+=resolv.conf= is required inside the container. From the host:
 #+BEGIN_EXAMPLE
   mount --bind -o ro /etc/resolv.conf rootfs/etc/resolv.conf
 #+END_EXAMPLE
@@ -142,7 +141,7 @@ In the host:
 In the container:
 #+BEGIN_EXAMPLE
   ip addr
-  MAC=$(ip addr show dev eth0 | grep 'link/ether' | tr -s ' ' | cut -d' ' -f3)
+  MAC=$(ip addr show dev veth1 | grep 'link/ether' | tr -s ' ' | cut -d' ' -f3)
   ip link set dev veth1 name eth0 address $MAC
   ip addr add dev eth0 172.19.35.2/24
   ip link set eth0 up
@@ -154,7 +153,7 @@ In the container:
 
 ** Tap
 We want a device in the root namespace that:
-+ connects the containerized network with the physical
++ connects the containerized network with the physical one
 + applies natting
 
 We can use a TAP. L2 device, gate to user space.
@@ -225,6 +224,11 @@ Look at the routing and ARP tables:
 From another node in the LAN, you can't ping for now, because it doesn't know
 how to reach the container IP.
 
+#+BEGIN_EXAMPLE
+  ip route get 172.19.35.2
+  ping 172.19.35.2
+#+END_EXAMPLE
+
 Routing table!
 #+BEGIN_EXAMPLE
   ip route add 172.19.35.0/24 via 10.141.0.1 src 10.141.0.2
@@ -246,6 +250,43 @@ different IPs:
 + the bridge: 172.19.36.1/16
 + the container: 172.19.36.2/24
 + default route for the container: 172.19.36.1
+
+** Remote container (I)
+#+BEGIN_EXAMPLE
+  unshare -pmn -f chroot rootfs /usr/bin/env -i \
+      HOME=/root \
+      PATH=/bin:/usr/bin:/sbin:/usr/sbin \
+      /bin/ash -l
+#+END_EXAMPLE
+
+then in the host:
+#+BEGIN_EXAMPLE
+  CPID=$(ps -C ash -o pid= | tr -d ' ')
+  ip link add veth0 type veth peer name veth1
+  ip link set veth1 netns $CPID
+  ip link set dev veth0 up
+  ip tuntap add tap0 mode tap user root
+  ip link set tap0 up
+  ip link add br0 type bridge
+  ip link set tap0 master br0
+  ip link set veth0 master br0
+  ip addr add dev br0 172.19.36.1/16
+  ip link set br0 up
+  echo 1 > /proc/sys/net/ipv4/ip_forward
+  iptables -t nat -A POSTROUTING -o br0 -j MASQUERADE
+  iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+#+END_EXAMPLE
+
+** Remote container (II)
+in the container:
+#+BEGIN_EXAMPLE
+  ip link set dev lo up
+  MAC=$(ip addr show dev veth1 | grep 'link/ether' | tr -s ' ' | cut -d' ' -f3)
+  ip link set dev veth1 name eth0 address $MAC
+  ip addr add dev eth0 172.19.36.2/24
+  ip link set eth0 up
+  ip route add default via 172.19.36.1
+#+END_EXAMPLE
 
 ** New routing rules
 In the first host we still don't know how to get to the remote container.
