@@ -126,6 +126,10 @@ then you need to restart the container (mount were isolated)
 #+END_EXAMPLE
 
 ** Veth pair
+#+ATTR_HTML: :width 80% :height 80%
+[[file:detail-veth.svg]]
+
+** Veth pair
 The veth pair is like an ethernet cable between namespaces.
 
 In the host:
@@ -145,6 +149,10 @@ In the container:
 #+END_EXAMPLE
 
 ** Tap
+#+ATTR_HTML: :width 80% :height 80%
+[[file:detail-tap.svg]]
+
+** Tap
 We want a device in the root namespace that:
 + connects the containerized network with the physical
 + applies natting
@@ -155,6 +163,10 @@ We can use a TAP. L2 device, gate to user space.
   ip tuntap add tap0 mode tap user root
   ip link set tap0 up
 #+END_EXAMPLE
+
+** Bridge
+#+ATTR_HTML: :width 80% :height 80%
+[[file:detail-bridge.svg]]
 
 ** Bridge
 We need to connect one end of the veth with the tap:
@@ -172,7 +184,7 @@ give it an address:
 
 ** Natting
 #+ATTR_HTML: :width 80% :height 80%
-[[file:detail-final.svg]]
+[[file:detail-nat.svg]]
 
 ** Natting
 In the host, allow IP forwarding:
@@ -205,6 +217,10 @@ Look at the routing and ARP tables:
 #+END_EXAMPLE
 
 * Routing
+** Routing
+#+ATTR_HTML: :width 80% :height 80%
+[[file:detail-final.svg]]
+
 ** In the same LAN
 From another node in the LAN, you can't ping for now, because it doesn't know
 how to reach the container IP.
@@ -240,10 +256,6 @@ Routing table!
 #+END_EXAMPLE
 
 ** End-to-end
-#+ATTR_HTML: :width 80% :height 80%
-[[file:detail-final.svg]]
-
-** End-to-end
 From the second container:
 #+BEGIN_EXAMPLE
   ping 172.19.35.2
@@ -252,6 +264,10 @@ From the second container:
   ip route get 172.19.35.2
   ip neigh
 #+END_EXAMPLE
+
+** End result
+#+ATTR_HTML: :width 80% :height 80%
+[[file:general.svg]]
 
 * Conclusions
 + Docker, Kubernetes, Calico, Flannel, ... are all nice tools
