@@ -7,7 +7,13 @@
 #+OPTIONS: toc:1
 
 * Introduction
-...
++ Containers are a powerful concept
++ Networking (especially SDN) is a complex topic
+
+Containers ♥ Networking
+
++ Setup step-by-step container networking only by using Linux commands
++ To understand better how they work
 
 * The image
 ** Prepare the root fs
@@ -102,10 +108,12 @@ You can enter any combination of namespaces you want:
 #+END_EXAMPLE
 
 * Networking
-** overview
-TODO: schema
+** Overview
 
-** isolated?
+#+ATTR_HTML: :width 100% :height 100%
+[[file:general.svg]]
+
+** Isolated?
 The =resolv.conf= is required inside the container. From the host:
 #+BEGIN_EXAMPLE
   mount --bind -o ro /etc/resolv.conf rootfs/etc/resolv.conf
@@ -118,7 +126,7 @@ then you need to restart the container (mount were isolated)
   ip link set dev lo up
 #+END_EXAMPLE
 
-** veth pair
+** Veth pair
 The veth pair is like an ethernet cable between namespaces.
 
 In the host:
@@ -248,4 +256,10 @@ TODO: schema
 
 Ah... this is not all:
 + cgroups, caps, user namespaces
-+ overlay networks, ipvlan, vlan, macvlan, macvtap, team, ipsec, Open vSwitch
++ overlay networks, ipvlan, vlan, macvlan, macvtap, team, ipsec
++ ...
+
+* Questions?
+  :PROPERTIES:
+  :UNNUMBERED: t
+  :END:
