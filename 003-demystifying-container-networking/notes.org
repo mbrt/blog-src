@@ -491,3 +491,108 @@ To recreate the rootfs from a shared dir:
   mkdir -p $dest
   rsync -a $from/ $dest/
 #+END_SRC
+
+* Calico experiments
+They use ARP proxy instead of a linux bridge and NAT. Here's more or less what I
+was able to do so far, by looking at calico source code.
+
+=intdataplane/endpoint_mgr.go=
+#+BEGIN_SRC go
+  // Enable strict reverse-path filtering.  This prevents a workload from spoofing its
+  // IP address.  Non-privileged containers have additional anti-spoofing protection
+  // but VM workloads, for example, can easily spoof their IP.
+  err := m.writeProcSys(fmt.Sprintf("/proc/sys/net/ipv4/conf/%s/rp_filter", name), "1")
+  if err != nil {
+	  return err
+  }
+  // Enable routing to localhost.  This is required to allow for NAT to the local
+  // host.
+  err = m.writeProcSys(fmt.Sprintf("/proc/sys/net/ipv4/conf/%s/route_localnet", name), "1")
+  if err != nil {
+	  return err
+  }
+  // Enable proxy ARP, this makes the host respond to all ARP requests with its own
+  // MAC.  This has a couple of advantages:
+  //
+  // - In OpenStack, we're forced to configure the guest's networking using DHCP.
+  //   Since DHCP requires a subnet and gateway, representing the Calico network
+  //   in the natural way would lose a lot of IP addresses.  For IPv4, we'd have to
+  //   advertise a distinct /30 to each guest, which would use up 4 IPs per guest.
+  //   Using proxy ARP, we can advertise the whole pool to each guest as its subnet
+  //   but have the host respond to all ARP requests and route all the traffic whether
+  //   it is on or off subnet.
+  //
+  // - For containers, we install explicit routes into the containers network
+  //   namespace and we use a link-local address for the gateway.  Turing on proxy ARP
+  //   means that we don't need to assign the link local address explicitly to each
+  //   host side of the veth, which is one fewer thing to maintain and one fewer
+  //   thing we may clash over.
+  err = m.writeProcSys(fmt.Sprintf("/proc/sys/net/ipv4/conf/%s/proxy_arp", name), "1")
+  if err != nil {
+	  return err
+  }
+  // Normally, the kernel has a delay before responding to proxy ARP but we know
+  // that's not needed in a Calico network so we disable it.
+  err = m.writeProcSys(fmt.Sprintf("/proc/sys/net/ipv4/neigh/%s/proxy_delay", name), "0")
+  if err != nil {
+	  return err
+  }
+  // Enable IP forwarding of packets coming _from_ this interface.  For packets to
+  // be forwarded in both directions we need this flag to be set on the fabric-facing
+  // interface too (or for the global default to be set).
+  err = m.writeProcSys(fmt.Sprintf("/proc/sys/net/ipv4/conf/%s/forwarding", name), "1")
+  if err != nil {
+	  return err
+  }
+#+END_SRC
+
+so basically, in the host, for the veth0:
+#+BEGIN_EXAMPLE
+  echo 1 > /proc/sys/net/ipv4/conf/veth0/rp_filter
+  echo 1 > /proc/sys/net/ipv4/conf/veth0/route_localnet
+  echo 1 >/proc/sys/net/ipv4/conf/veth0/proxy_arp
+  echo 0 >/proc/sys/net/ipv4/neigh/veth0/proxy_delay
+  echo 1 >/proc/sys/net/ipv4/conf/veth0/forwarding
+#+END_EXAMPLE
+
+then enable forwarding also for eth0:
+#+BEGIN_EXAMPLE
+  echo 1 >/proc/sys/net/ipv4/conf/eth0/forwarding
+#+END_EXAMPLE
+
+and add the route to the container through the veth:
+#+BEGIN_EXAMPLE
+  ip r add 172.19.35.2 dev veth0 scope link
+#+END_EXAMPLE
+
+In the container:
+#+BEGIN_EXAMPLE
+  ip r add 169.254.1.1 dev eth0  scope link
+  ip r add default via 169.254.1.1 dev eth0
+#+END_EXAMPLE
+
+but the IP needed to be a /32:
+#+BEGIN_EXAMPLE
+  /# ip a
+  1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN
+      link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+      inet 127.0.0.1/8 scope host lo
+         valid_lft forever preferred_lft forever
+      inet6 ::1/128 scope host
+         valid_lft forever preferred_lft forever
+  4: eth0@if5: <BROADCAST,MULTICAST,UP,LOWER_UP,M-DOWN> mtu 1500 qdisc pfifo_fast state UP qlen 1000
+      link/ether 06:db:47:7b:48:05 brd ff:ff:ff:ff:ff:ff
+      inet 172.19.35.2/32 scope global eth0
+         valid_lft forever preferred_lft forever
+      inet6 fe80::4db:47ff:fe7b:4805/64 scope link
+         valid_lft forever preferred_lft forever
+#+END_EXAMPLE
+
+in this way the routing table in the container looks like this:
+#+BEGIN_EXAMPLE
+  /# ip r
+  default via 169.254.1.1 dev eth0
+  169.254.1.1 dev eth0
+#+END_EXAMPLE
+
+the Internet is still not reachable though.
