@@ -595,4 +595,91 @@ in this way the routing table in the container looks like this:
   169.254.1.1 dev eth0
 #+END_EXAMPLE
 
-the Internet is still not reachable though.
+to reach the internet you simply have to enable NAT also for the container
+network in your edge router (or the head node):
+#+BEGIN_EXAMPLE
+  iptables -t nat -A POSTROUTING -o eth1 -j MASQUERADE -s 172.19.0.0/16
+#+END_EXAMPLE
+
+where =eth1= is the external interface. Then you have to add the routing rule to
+reach the containers in the node:
+#+BEGIN_EXAMPLE
+  ip route add 172.19.35.0/24 via 10.141.0.1 src 10.141.255.254
+#+END_EXAMPLE
+
+the internet is now reachable from the container.
+
+* No TAP experiment
+Create the container:
+#+BEGIN_EXAMPLE
+  unshare -pmn -f chroot rootfs /usr/bin/env -i \
+      HOME=/root \
+      PATH=/bin:/usr/bin:/sbin:/usr/sbin \
+      /bin/ash -l
+#+END_EXAMPLE
+
+then in the host:
+#+BEGIN_EXAMPLE
+  CPID=$(ps -C ash -o pid= | tr -d ' ')
+  ip link add veth0 type veth peer name veth1
+  ip link set veth1 netns $CPID
+  ip link set dev veth0 up
+  ip link add br0 type bridge
+  ip link set veth0 master br0
+  ip addr add dev br0 172.19.36.1/24
+  ip link set br0 up
+  echo 1 > /proc/sys/net/ipv4/ip_forward
+  iptables -t nat -A POSTROUTING -o br0 -j MASQUERADE
+  iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+#+END_EXAMPLE
+
+in the container:
+#+BEGIN_EXAMPLE
+  ip link set dev lo up
+  MAC=$(ip addr show dev veth1 | grep 'link/ether' | tr -s ' ' | cut -d' ' -f3)
+  ip link set dev veth1 name eth0 address $MAC
+  ip addr add dev eth0 172.19.36.2/24
+  ip link set eth0 up
+  ip route add default via 172.19.36.1
+#+END_EXAMPLE
+
+so the TAP is not really needed.
+
+** Second container in the same host
+Create the container:
+#+BEGIN_EXAMPLE
+  unshare -pmn -f chroot rootfs /usr/bin/env -i \
+      HOME=/root \
+      PATH=/bin:/usr/bin:/sbin:/usr/sbin \
+      /bin/ash -l
+#+END_EXAMPLE
+
+run another process in the container, to help distinguishing the PID from the
+one of the other container (e.g. =sleep 1000=).
+
+then in the host:
+#+BEGIN_EXAMPLE
+  CPID=$(ps -C sleep -o pid= | tr -d ' ')
+  ip link add veth2 type veth peer name veth3
+  ip link set veth3 netns $CPID
+  ip link set dev veth2 up
+  ip link set veth2 master br0
+#+END_EXAMPLE
+
+in the container:
+#+BEGIN_EXAMPLE
+  ip link set dev lo up
+  MAC=$(ip addr show dev veth3 | grep 'link/ether' | tr -s ' ' | cut -d' ' -f3)
+  ip link set dev veth3 name eth0 address $MAC
+  ip addr add dev eth0 172.19.36.3/24
+  ip link set eth0 up
+  ip route add default via 172.19.36.1
+#+END_EXAMPLE
+
+and not both are mutually pingable locally. The communication happens at level
+2, as proven by the ARP table in the container:
+#+BEGIN_EXAMPLE
+  /# ip neigh
+  172.19.36.2 dev eth0 lladdr 9a:af:f1:32:ca:91 ref 1 used 25/25/25 probes 4 REACHABLE
+  172.19.36.1 dev eth0 lladdr 5e:9a:9c:3b:69:ea used 33/33/7 probes 4 STALE
+#+END_EXAMPLE
