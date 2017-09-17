@@ -2,3 +2,41 @@
 #+SUBTITLE: Build up networking for containers from scratch
 # to get rid of the '_' subscript problem
 #+OPTIONS: ^:{}
+
+With my current employer I had the chance to debug and understand better how
+containers work. We had to solve some networking problems a customer had with
+[[https://kubernetes.io/][Kubernetes]], and I got hooked up. After solving the problem, I spent more time on
+investigating what actually makes a container after all. After seeing the
+wonderful talks by [[https://youtu.be/wyqoi52k5jM][Eric Chiang]] and [[https://youtu.be/b3XDl0YsVsg][Laurent Bernaille]], and reading through the
+very informative posts by [[https://blog.lizzie.io/linux-containers-in-500-loc.html][Lizzie Dixon]] and [[http://jvns.ca/blog/2016/10/10/what-even-is-a-container/][Julia Evans]] (that I really really
+recommend), I got enough information about how a container is created and
+managed. I'm going to rip off and mix some stuff from their awesome posts in the
+first part of this post.
+
+What I missed in those talks was the networking part. How do containers talk to
+each other? In Bernaille's post there is some information, but I after seeing
+the video I was still not convinced completely. I was especially interested
+about how [[https://www.projectcalico.org/][Calico]] works, and there I could find very little information.
+
+To answer this kind of questions I usually follow these steps:
+1. read stuff
+2. try stuff
+3. go to step 1.
+
+For many things "step 1" is enough, but sometimes resources on the Internet are
+foggy and even after reading a lot, I still feel confused. In that case I try to
+reproduce and do things on my own (I really like Julia Evans' approach). It's
+time consuming but it usually works. Trying out things generates new questions,
+that I answer by reading and trying them out, and so on. Never ending story, but
+for this topic I reached a point where I can give my contribution I think.
+
+This post is an extended version of a talk I gave internally at my company,
+trying to shed some light on the subject of containers networking.
+
+* Introduction
+
+Rise your hand if you ever tried the magic of [[https://www.docker.com/][Docker]] at least once. Is a
+container magic after all? Is it composed by very complicated tools that work
+together to make this world emerge? Are they virtual machines? In the first part
+of this post I'm going to create a container from scratch, by using only a Linux
+shell and standard Linux commands.
