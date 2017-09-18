@@ -16,7 +16,7 @@ first part of this post.
 What I missed in those talks was the networking part. How do containers talk to
 each other? In Bernaille's post there is some information, but I after seeing
 the video I was still not convinced completely. I was especially interested
-about how [[https://www.projectcalico.org/][Calico]] works, and there I could find very little information.
+about how [[https://www.projectcalico.org/][Calico]] works, and for that I could find very little information.
 
 To answer this kind of questions I usually follow these steps:
 1. read stuff
@@ -33,10 +33,257 @@ for this topic I reached a point where I can give my contribution I think.
 This post is an extended version of a talk I gave internally at my company,
 trying to shed some light on the subject of containers networking.
 
-* Introduction
+* Part one: containers from scratch
+Rise your hand if you ever tried the magic of [[https://www.docker.com/][Docker]] at least once. You pull an
+image from the Internet, you run it and you are projected inside another OS,
+with different libraries and applications installed, and all of that in no time.
+But how magic is a container after all? Is it composed by very complicated
+tools? Is it a sort of virtual machine? In the first part of this post I'm going
+to create a container from scratch, by using only a Linux shell and standard
+Linux commands.
 
-Rise your hand if you ever tried the magic of [[https://www.docker.com/][Docker]] at least once. Is a
-container magic after all? Is it composed by very complicated tools that work
-together to make this world emerge? Are they virtual machines? In the first part
-of this post I'm going to create a container from scratch, by using only a Linux
-shell and standard Linux commands.
+** Prepare the image
+When you do a =docker pull= you are downloading a container image from the
+Internet. This image at its core is basically just a root filesystem. You can
+safely ignore the fact that it's composed by multiple stacked layers, because
+the end result is just a root filesystem.
+
+So we can try to make our own, and for this post I decided to go with [[https://alpinelinux.org/][Alpine
+Linux]], because it's small and it's different from my distribution.[fn:1]
+Needless to say that for this to work you have to be running on Linux and with a
+fairly recent Kernel. I haven't checked the actual requirement, but if you
+updated your system in the last 5 years,[fn:2] you're probably good to go.
+
+Be powerful, be root. Save yourself problems and run these commands as root.
+You'll save yourself a lot of =sudo= invocations and "permission denied"
+messages:
+#+BEGIN_EXAMPLE
+  sudo su
+#+END_EXAMPLE
+
+Download the mini root filesystem from the Alpine website and put it somewhere.
+Then extract it:
+#+BEGIN_EXAMPLE
+  mkdir rootfs
+  cd rootfs
+  tar xf ../alpine-minirootfs-3.6.2-x86_64.tar.gz
+#+END_EXAMPLE
+
+if you look there, you'll see the root filesystem:
+#+BEGIN_EXAMPLE
+  [root@mike-dell rootfs]# ls -l
+  total 64
+  drwxr-xr-x  2 root root 4096 Aug 13 16:22 bin
+  drwxr-xr-x  4 root root 4096 Jun 17 11:46 dev
+  drwxr-xr-x 15 root root 4096 Aug 13 16:26 etc
+  drwxr-xr-x  2 root root 4096 Jun 17 11:46 home
+  drwxr-xr-x  5 root root 4096 Aug 13 16:22 lib
+  drwxr-xr-x  5 root root 4096 Jun 17 11:46 media
+  drwxr-xr-x  2 root root 4096 Jun 17 11:46 mnt
+  dr-xr-xr-x  2 root root 4096 Jun 17 11:46 proc
+  drwx------  2 root root 4096 Aug 13 16:08 root
+  drwxr-xr-x  2 root root 4096 Jun 17 11:46 run
+  drwxr-xr-x  2 root root 4096 Jun 17 11:46 sbin
+  drwxr-xr-x  2 root root 4096 Jun 17 11:46 srv
+  drwxr-xr-x  2 root root 4096 Jun 17 11:46 sys
+  drwxrwxrwt  2 root root 4096 Jun 17 11:46 tmp
+  drwxr-xr-x  7 root root 4096 Jun 17 11:46 usr
+  drwxr-xr-x 13 root root 4096 Aug 13 16:22 var
+#+END_EXAMPLE
+
+** chroot
+Now let's try to =chroot= there. In this way we create a process and change it's
+root directory to that one we just created:
+#+BEGIN_EXAMPLE
+  chroot rootfs /bin/ash
+  export PATH=/bin:/usr/bin:/sbin
+#+END_EXAMPLE
+
+Exporting a new ~$PATH~ is wise, because otherwise in the chroot environment
+you'd be carrying your host ~$PATH~ with you, and this might not be correct
+there. So where are we exactly?
+#+BEGIN_EXAMPLE
+  / # cat /etc/os-release
+  NAME="Alpine Linux"
+  ID=alpine
+  VERSION_ID=3.6.2
+  PRETTY_NAME="Alpine Linux v3.6"
+  HOME_URL="http://alpinelinux.org"
+  BUG_REPORT_URL="http://bugs.alpinelinux.org"
+#+END_EXAMPLE
+
+Yes, in Alpine Linux. And you can't reach your host files anymore, because your
+root directory is now the one we just chroot-ed into.
+
+Let's not install some useful packages. They'll come in handy for later:
+#+BEGIN_EXAMPLE
+  apk add --no-cache python findmnt curl libcap bind-tools
+#+END_EXAMPLE
+
+Another thing we have to fix now is the =/proc= filesystem. If you look there
+you'll see that it's empty. This way any utility like =ps= won't work. Let's
+then mount it:
+#+BEGIN_EXAMPLE
+  mount -t proc proc /proc
+#+END_EXAMPLE
+
+Now a question for you: Is this actually a container? Sort-of, but the isolation
+is pretty poor.
+
+Take a look at =ps aux= from the "container":
+#+BEGIN_EXAMPLE
+  /bin # ps aux
+  PID   USER     TIME   COMMAND
+      1 root       0:03 {systemd} /sbin/init
+      2 root       0:00 [kthreadd]
+      3 root       0:00 [kworker/0:0]
+      4 root       0:00 [kworker/0:0H]
+      6 root       0:00 [mm_percpu_wq]
+      7 root       0:00 [ksoftirqd/0]
+      8 root       0:01 [rcu_preempt]
+      9 root       0:00 [rcu_sched]
+     10 root       0:00 [rcu_bh]
+     11 root       0:00 [migration/0]
+     12 root       0:00 [watchdog/0]
+     13 root       0:00 [cpuhp/0]
+     14 root       0:00 [cpuhp/1]
+     15 root       0:00 [watchdog/1]
+     16 root       0:00 [migration/1]
+     17 root       0:00 [ksoftirqd/1]
+     19 root       0:00 [kworker/1:0H]
+     ...
+#+END_EXAMPLE
+
+oops... I can see all the processes of my host from here. An I can actually kill
+them:
+#+BEGIN_EXAMPLE
+  killall top
+#+END_EXAMPLE
+
+Not only that. Look at the network:
+#+BEGIN_EXAMPLE
+  /bin # ip link
+  1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN qlen 1000
+      link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+  3: wlan0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP qlen 1000
+      link/ether 40:49:0f:fe:c3:05 brd ff:ff:ff:ff:ff:ff
+#+END_EXAMPLE
+
+You can see my WiFi card for example. I could change the IP, take it down, etc.
+Not nice. The answer is no then, this is not a container, because it's not
+isolated enough.
+
+** Namespaces
+Linux has namespaces to the rescue. As =man 7 namespaces= says:
+#+BEGIN_QUOTE
+  A namespace wraps a global system resource in an abstraction that makes it
+  appear to the processes within the namespace that they have their own isolated
+  instance of the global resource. Changes to the global resource are visible to
+  other processes that are members of the namespace, but are invisible to other
+  processes. One use of namespaces is to implement containers.
+#+END_QUOTE
+
+or in other words: we take a resource like the list of processes in the machine,
+we make an isolated copy of it, give it to our process and make sure that any
+change there is not reflected to the root process list. This is the PID
+namespace. Is it hard to set up? Judge yourself:
+#+BEGIN_EXAMPLE
+  unshare -p -f chroot rootfs /usr/bin/env -i \
+      HOME=/root \
+      PATH=/bin:/usr/bin:/sbin:/usr/sbin \
+      /bin/ash -l
+#+END_EXAMPLE
+
+With this command from the host, we create a new process (the =chroot= we used
+before) but we put it in a new PID namespace by prepending the =unshare -p=
+invocation. This command is nothing fancy, just a handy wrapper around the
+=unshare= Linux system call. The =env= command executed after the =chroot= makes
+sure that the environment is correctly filled, avoiding us to repeat the
+=export= command every time.
+
+Let's take a look at the list of processes now, after we mount =/proc= again:
+#+BEGIN_EXAMPLE
+  / # mount -t proc proc /proc
+  / # ps
+  PID   USER     TIME   COMMAND
+      1 root       0:00 /bin/ash
+      5 root       0:00 ps
+#+END_EXAMPLE
+
+Oh yes. Now our shell is actually PID 1. How weird is that? And yes, you won't
+be able to kill any host process.
+
+From the host you can instead see the containerized process:
+#+BEGIN_EXAMPLE
+  [root@mike-dell micheleb]# ps aux |grep /ash
+  root      8552  0.0  0.0   1540   952 pts/3    S+   20:06   0:00 /bin/ash
+#+END_EXAMPLE
+
+and kill it.
+
+The PID is not the only namespace you can create, as you can imagine. The
+networking for example is still the host one:
+#+BEGIN_EXAMPLE
+  /bin # ip link
+  1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN qlen 1000
+      link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+  3: wlan0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP qlen 1000
+      link/ether 40:49:0f:fe:c3:05 brd ff:ff:ff:ff:ff:ff
+#+END_EXAMPLE
+
+Let's isolate it then. It's just a matter of adding some flags to =unshare=:
+#+BEGIN_EXAMPLE
+  unshare -pmn -f chroot rootfs /usr/bin/env -i \
+      HOME=/root \
+      PATH=/bin:/usr/bin:/sbin:/usr/sbin \
+      /bin/ash -l
+#+END_EXAMPLE
+
+here we are isolating the PID, mount and network namespaces, all at once. And
+here is the result:
+#+BEGIN_EXAMPLE
+  # / ip addr
+  1: lo: <LOOPBACK> mtu 65536 qdisc noop state DOWN qlen 1000
+      link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+  # / ping -c1 8.8.8.8
+  PING 8.8.8.8 (8.8.8.8): 56 data bytes
+  ping: sendto: Network unreachable
+#+END_EXAMPLE
+
+Ops... maybe we are a bit too isolated now. Topic of the next section will be
+how to open a little hole in this isolation and get some containers to
+communicate in some way.
+
+Before to move on though I'd like to put a little disclaimer here. Even though
+I'm done with this section, it doesn't mean that with an =unshare= command you get a
+fully secure container. Don't go to your boss and say that you want to toss
+Docker and use shell scripts, because it's the same thing.
+
+What our container is still missing is, for example, resource isolation. We
+could crash the machine by creating a lot of processes, or slow it down by
+allocating a lot of memory. For this you need to use =cgroups=.[fn:3] Then
+there's the problem you are still root inside the container, You are limited but
+you are still pretty powerful. You could for example change the system clock,
+reboot the machine, and other scary things. To control them you'd need to drop
+some capabilities[fn:4]. I won't dig into these concepts in this post, because
+they don't affect the networking. All of that involves just simple Linux system
+calls and some magic in the =/proc= and =/sys/fs/cgroup/= filesystems.
+
+I point you though to the excellent resources I linked at the beginning,
+especially [[https://youtu.be/wyqoi52k5jM][Eric Chiang]] and [[https://blog.lizzie.io/linux-containers-in-500-loc.html][Lizzie Dixon]], if you are more curious. I could also
+write another post on that in the future.
+
+I hope I nevertheless convinced you that a container is nothing more than a
+highly configured Linux process. No virtualization and no crazy stuff is going
+on there. You could create a container today with just a plain Linux machine, by
+typing a bunch of Linux commands.
+
+* Part two: networking from scratch
+* Bonus 1: Calico
+* Bonus 2: Debugging container networking
+* Concluding remarks
+* Footnotes
+[fn:1] I run my laptop with [[https://www.archlinux.org/][Arch Linux]] and I used [[https://www.centos.org/][CentOS 7]] for my demo cluster.
+[fn:2] Too bad CentOS 6 users!
+[fn:3] Again, =man 7 cgroups= is your friend.
+[fn:4] I might be boring: =man 7 capabilities=.
