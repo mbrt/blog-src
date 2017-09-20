@@ -265,7 +265,7 @@ allocating a lot of memory. For this you need to use =cgroups=.[fn:3] Then
 there's the problem you are still root inside the container, You are limited but
 you are still pretty powerful. You could for example change the system clock,
 reboot the machine, and other scary things. To control them you'd need to drop
-some capabilities[fn:4]. I won't dig into these concepts in this post, because
+some capabilities.[fn:4] I won't dig into these concepts in this post, because
 they don't affect the networking. All of that involves just simple Linux system
 calls and some magic in the =/proc= and =/sys/fs/cgroup/= filesystems.
 
@@ -275,10 +275,87 @@ write another post on that in the future.
 
 I hope I nevertheless convinced you that a container is nothing more than a
 highly configured Linux process. No virtualization and no crazy stuff is going
-on there. You could create a container today with just a plain Linux machine, by
-typing a bunch of Linux commands.
+on here. You could create a container today with just a plain Linux machine, by
+calling a bunch of Linux syscalls.
 
 * Part two: networking from scratch
+Goal of this section will be to break the isolation we put our container in, and
+make it communicate with:
++ another container in the same host;
++ another container in another host;
++ the Internet.
+
+I'm running this experiment in a three nodes cluster. Among the nodes there is a
+private network under 10.141/16. The head node has two network interfaces, so
+it's able to communicate with both the external and the internal network. The
+other two nodes have only one network interface and they can reach the external
+network by using the head node as gateway. The following schema should clarify
+the situation:
+
+*** TODO physical network schema
+
+** Ping the host
+Right now our container is completely isolated. Let's try to at least ping the
+same host:
+#+BEGIN_EXAMPLE
+  /# ping 10.141.0.1
+  PING 10.141.0.1 (10.141.0.1): 56 data bytes
+  ping: sendto: Network unreachable
+#+END_EXAMPLE
+
+It's not working either. I would say that's good, because the network isolation
+actually works.
+
+How do we solve this problem? We use a veth pair, which stands for Virtual
+Ethernet pair. As the name suggests, a veth pair is a couple of virtual
+interfaces, that act as an Ethernet cable. Whatever comes from one end, goes to
+the other. Sounds useful? Yes, because we can move one end of the pair inside
+the container, and keep the other end in the host. Technically what we're going
+to do is moving one end into the network namespace of the container.
+
+In another shell, same host, let's setup a ~CPID~ variable to help us remember
+what is the container PID:[fn:5]
+#+BEGIN_EXAMPLE
+  CPID=$(ps -C ash -o pid= | tr -d ' ')
+#+END_EXAMPLE
+
+Let's create the veth pair with =iproute=:[fn:6], move one end into the
+container and bring the host end up:
+#+BEGIN_EXAMPLE
+  ip link add veth0 type veth peer name veth1
+  ip link set veth1 netns $CPID
+  ip link set dev veth0 up
+#+END_EXAMPLE
+
+If you take a look at the interfaces in the container now, you'll see something
+like:
+#+BEGIN_EXAMPLE
+  /# ip l
+  1: lo: <LOOPBACK> mtu 65536 qdisc noop state DOWN qlen 1000
+      link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+  3: veth1@if4: <BROADCAST,MULTICAST,M-DOWN> mtu 1500 qdisc noop state DOWN qlen 1000
+      link/ether 8e:7f:62:52:76:71 brd ff:ff:ff:ff:ff:ff
+#+END_EXAMPLE
+
+Cool! Everything is down, but we have a new interface. I don't like the name, so
+let's rename it to something less scary, like =eth0=:
+#+BEGIN_EXAMPLE
+  ip link set dev veth1 name eth0 address 8e:7f:62:52:76:71
+#+END_EXAMPLE
+
+where the address is the MAC address shown by =ip link=, or =ip addr show dev
+veth1=.
+
+Now let's give it an IPv4 and bring it up, along with the loopback interface:
+#+BEGIN_EXAMPLE
+  ip addr add dev eth0 172.19.35.2/24
+  ip link set eth0 up
+  ip link set lo up
+#+END_EXAMPLE
+
+As you can see I choose another network for this container. We won't consume
+addresses from the physical internal network in this way.
+
 * Bonus 1: Calico
 * Bonus 2: Debugging container networking
 * Concluding remarks
@@ -287,3 +364,6 @@ typing a bunch of Linux commands.
 [fn:2] Too bad CentOS 6 users!
 [fn:3] Again, =man 7 cgroups= is your friend.
 [fn:4] I might be boring: =man 7 capabilities=.
+[fn:5] This snippet assumes your machine is running only one =ash= command.
+[fn:6] =man ip=. If you're not familiar with it, today you have a good change to
+get started , because =ifconfig= has been long deprecated.
