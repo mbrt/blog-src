@@ -33,6 +33,15 @@ for this topic I reached a point where I can give my contribution I think.
 This post is an extended version of a talk I gave internally at my company,
 trying to shed some light on the subject of containers networking.
 
+Prerequisite for understanding this post is some basic networking concepts,
+otherwise it's going to be hard for you to follow:
++ IP networking, and in particular the [[https://en.wikipedia.org/wiki/Classless_Inter-Domain_Routing#CIDR_notation][CIDR notation]];
++ the [[https://en.wikipedia.org/wiki/OSI_model][OSI model]], and in particular level 2 and 3;
++ NAT ([[https://en.wikipedia.org/wiki/Network_address_translation][Network Address Translation]]);
++ some familiarity with Linux.
+
+I will link the more advanced things as the post unfolds.
+
 * Part one: containers from scratch
 Rise your hand if you ever tried the magic of [[https://www.docker.com/][Docker]] at least once. You pull an
 image from the Internet, you run it and you are projected inside another OS,
@@ -99,9 +108,10 @@ root directory to that one we just created:
   export PATH=/bin:/usr/bin:/sbin
 #+END_EXAMPLE
 
-Exporting a new ~$PATH~ is wise, because otherwise in the chroot environment
-you'd be carrying your host ~$PATH~ with you, and this might not be correct
-there. So where are we exactly?
+This will execute a shell inside the chroot environment. Side note: exporting a
+new ~$PATH~ (the second command) is wise, because otherwise you'd be carrying
+your host ~$PATH~ in the chroot, and this might not be correct there. So where
+are we exactly?
 #+BEGIN_EXAMPLE
   / # cat /etc/os-release
   NAME="Alpine Linux"
@@ -115,24 +125,23 @@ there. So where are we exactly?
 Yes, in Alpine Linux. And you can't reach your host files anymore, because your
 root directory is now the one we just chroot-ed into.
 
-Let's not install some useful packages. They'll come in handy for later:
+Let's now install some useful packages. They'll come in handy for later:
 #+BEGIN_EXAMPLE
   apk add --no-cache python findmnt curl libcap bind-tools
 #+END_EXAMPLE
 
 Another thing we have to fix now is the =/proc= filesystem. If you look there
-you'll see that it's empty. This way any utility like =ps= won't work. Let's
-then mount it:
+you'll see that it's empty so any utility like =ps= won't work:
 #+BEGIN_EXAMPLE
   mount -t proc proc /proc
 #+END_EXAMPLE
 
-Now a question for you: Is this actually a container? Sort-of, but the isolation
-is pretty poor.
+Now a question for you: Is this actually a container?
 
-Take a look at =ps aux= from the "container":
+Sort-of, but the isolation is pretty poor. Take a look at =ps aux= from the
+"container":
 #+BEGIN_EXAMPLE
-  /bin # ps aux
+  / # ps aux
   PID   USER     TIME   COMMAND
       1 root       0:03 {systemd} /sbin/init
       2 root       0:00 [kthreadd]
@@ -151,7 +160,8 @@ Take a look at =ps aux= from the "container":
      16 root       0:00 [migration/1]
      17 root       0:00 [ksoftirqd/1]
      19 root       0:00 [kworker/1:0H]
-     ...
+   ...
+   2816 1170       0:00 top
 #+END_EXAMPLE
 
 oops... I can see all the processes of my host from here. An I can actually kill
@@ -162,7 +172,7 @@ them:
 
 Not only that. Look at the network:
 #+BEGIN_EXAMPLE
-  /bin # ip link
+  / # ip link
   1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN qlen 1000
       link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
   3: wlan0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP qlen 1000
@@ -170,8 +180,9 @@ Not only that. Look at the network:
 #+END_EXAMPLE
 
 You can see my WiFi card for example. I could change the IP, take it down, etc.
-Not nice. The answer is no then, this is not a container, because it's not
-isolated enough.
+Not nice. The answer is then NO, this is not a container, because it's not
+isolated enough. This is just a process that happens to see a different root
+filesystem.
 
 ** Namespaces
 Linux has namespaces to the rescue. As =man 7 namespaces= says:
@@ -292,9 +303,9 @@ other two nodes have only one network interface and they can reach the external
 network by using the head node as gateway. The following schema should clarify
 the situation:
 
-*** TODO physical network schema
+*TODO physical network schema*
 
-** Ping the host
+** Communicate within the host
 Right now our container is completely isolated. Let's try to at least ping the
 same host:
 #+BEGIN_EXAMPLE
@@ -303,17 +314,26 @@ same host:
   ping: sendto: Network unreachable
 #+END_EXAMPLE
 
-It's not working either. I would say that's good, because the network isolation
-actually works.
+It's not working, so the network is isolated. No matter what you do you won't be
+able to reach the outside, because the only interface you have there is the
+loopback (and it's also down).
+#+BEGIN_EXAMPLE
+  /# ip link
+  1: lo: <LOOPBACK> mtu 65536 qdisc noop state DOWN qlen 1000
+      link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+#+END_EXAMPLE
+
+If you create another container on the same host, you can imagine they're not
+going to be able to communicate either.
 
 How do we solve this problem? We use a veth pair, which stands for Virtual
-Ethernet pair. As the name suggests, a veth pair is a couple of virtual
+Ethernet pair. As the name suggests, a veth pair is a pair of virtual
 interfaces, that act as an Ethernet cable. Whatever comes from one end, goes to
 the other. Sounds useful? Yes, because we can move one end of the pair inside
-the container, and keep the other end in the host. Technically what we're going
-to do is moving one end into the network namespace of the container.
+the container, and keep the other end in the host. So we are basically piercing
+a hole in the container to slide our little virtual wire in.
 
-In another shell, same host, let's setup a ~CPID~ variable to help us remember
+In another shell, same host, let's setup a ~$CPID~ variable to help us remember
 what is the container PID:[fn:5]
 #+BEGIN_EXAMPLE
   CPID=$(ps -C ash -o pid= | tr -d ' ')
@@ -337,33 +357,102 @@ like:
       link/ether 8e:7f:62:52:76:71 brd ff:ff:ff:ff:ff:ff
 #+END_EXAMPLE
 
-Cool! Everything is down, but we have a new interface. I don't like the name, so
-let's rename it to something less scary, like =eth0=:
+Cool! Everything is down, but we have a new interface. Let's also rename it to
+something less scary, like =eth0=. You'll feel more at home in the container:
 #+BEGIN_EXAMPLE
   ip link set dev veth1 name eth0 address 8e:7f:62:52:76:71
 #+END_EXAMPLE
 
-where the address is the MAC address shown by =ip link=, or =ip addr show dev
-veth1=.
+where the address used is the MAC address shown by =ip link=, or =ip addr show
+dev veth1=.[fn:7]
 
-Now let's give it an IPv4 and bring it up, along with the loopback interface:
+Now let's step back for a second. We have a container with this "cable" pointing
+out. What kind of IP should we give to the container? What kind of connectivity
+do we want to provide? The way we are going to set it up is the default Docker
+way: bridge networking. Containers on the same host live on the same network,
+but different than the host one. This means that we have to setup a virtual
+network where containers are able to talk to each other at level 2 (also called
+[[https://en.wikipedia.org/wiki/Data_link_layer][data link layer]]). This also means that we won't consume any physical IP address
+from the host network.
+
+I choose the 172.19.35/24 subnet for the containers, since it doesn't conflict
+with the cluster private network (10.141/16).[fn:8] This means that I have space
+for ~2^8 - 2 = 30~ containers in this machine.[fn:9]
+
+Now let's give the container an IP and bring it up, along with the loopback
+interface:
 #+BEGIN_EXAMPLE
   ip addr add dev eth0 172.19.35.2/24
   ip link set eth0 up
   ip link set lo up
 #+END_EXAMPLE
 
-As you can see I choose another network for this container. We won't consume
-addresses from the physical internal network in this way.
+And this is the current situation:
+
+[[file:detail-veth.svg]]
+
+Now we want do to the very same thing with another container. So let's create it
+from the same root filesystem:
+#+BEGIN_EXAMPLE
+  unshare -pmn -f chroot rootfs /usr/bin/env -i \
+      HOME=/root \
+      PATH=/bin:/usr/bin:/sbin:/usr/sbin \
+      /bin/ash -l
+  mount -t proc proc /proc
+#+END_EXAMPLE
+
+Then in the host let's first setup another ~$CPID2~ variable with the PID of
+this new container,[fn:10] and then create another veth pair:
+#+BEGIN_EXAMPLE
+  ip link add veth2 type veth peer name veth3
+  ip link set veth3 netns $CPID2
+  ip link set dev veth2 up
+#+END_EXAMPLE
+
+Then rename the interface in the container, give it an IP and bring it up as
+before:
+#+BEGIN_EXAMPLE
+  ip link set dev lo up
+  MAC=$(ip addr show dev veth3 | grep 'link/ether' | tr -s ' ' | cut -d' ' -f3)
+  ip link set dev veth3 name eth0 address $MAC
+  ip addr add dev eth0 172.19.35.3/24
+  ip link set eth0 up
+#+END_EXAMPLE
+
+Note that I'm using another IP address in the 172.19.35/24 subnet.
 
 * Bonus 1: Calico
 * Bonus 2: Debugging container networking
 * Concluding remarks
 * Footnotes
+
 [fn:1] I run my laptop with [[https://www.archlinux.org/][Arch Linux]] and I used [[https://www.centos.org/][CentOS 7]] for my demo cluster.
+
 [fn:2] Too bad CentOS 6 users!
+
 [fn:3] Again, =man 7 cgroups= is your friend.
+
 [fn:4] I might be boring: =man 7 capabilities=.
+
 [fn:5] This snippet assumes your machine is running only one =ash= command.
+
 [fn:6] =man ip=. If you're not familiar with it, today you have a good change to
 get started , because =ifconfig= has been long deprecated.
+
+[fn:7] Handy if you want to get it from a script, as a quick hack:
+#+BEGIN_EXAMPLE
+  MAC=$(ip addr show dev veth1 | grep 'link/ether' | tr -s ' ' | cut -d' ' -f3)
+#+END_EXAMPLE
+
+[fn:8] Note that I'm using [[https://en.wikipedia.org/wiki/Private_network#Private_IPv4_address_spaces][private IPv4 address spaces.]]
+
+[fn:9] 24 bits are fixed by the network mask so I have only 8 bits to assign to
+hosts, but 172.19.35.0 is the network address, and 172.19.35.255 is the
+broadcast, so they aren't usable.
+
+[fn:10] A possibility would be to find it with =ps aux=, or if you're lazy you
+could temporarily run a recognizable process and query it's parent process from
+the host. I'm using =top= here:
+#+BEGIN_EXAMPLE
+  CPID2=$(ps -C ash -o ppid= | tr -d ' ')
+#+END_EXAMPLE
