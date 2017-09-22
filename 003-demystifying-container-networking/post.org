@@ -18,27 +18,21 @@ each other? In Bernaille's post there is some information, but I after seeing
 the video I was still not convinced completely. I was especially interested
 about how [[https://www.projectcalico.org/][Calico]] works, and for that I could find very little information.
 
-To answer this kind of questions I usually follow these steps:
-1. read stuff
-2. try stuff
-3. go to step 1.
+To answer this kind of questions I will try to create containers from scratch,
+by using just standard Linux commands and I will also create the required
+networking to make them happily communicate.
 
-For many things "step 1" is enough, but sometimes resources on the Internet are
-foggy and even after reading a lot, I still feel confused. In that case I try to
-reproduce and do things on my own (I really like Julia Evans' approach). It's
-time consuming but it usually works. Trying out things generates new questions,
-that I answer by reading and trying them out, and so on. Never ending story, but
-for this topic I reached a point where I can give my contribution I think.
+I like this approach because it gets low level enough to demystify things that
+look very complicated, while it's just a matter of spending some time to
+understand the basics.
 
 This post is an extended version of a talk I gave internally at my company,
 trying to shed some light on the subject of containers networking.
 
-Prerequisite for understanding this post is some basic networking concepts,
-otherwise it's going to be hard for you to follow:
+Prerequisites for a good understanding are some basic networking concepts, and Linux:
 + IP networking, and in particular the [[https://en.wikipedia.org/wiki/Classless_Inter-Domain_Routing#CIDR_notation][CIDR notation]];
 + the [[https://en.wikipedia.org/wiki/OSI_model][OSI model]], and in particular level 2 and 3;
-+ NAT ([[https://en.wikipedia.org/wiki/Network_address_translation][Network Address Translation]]);
-+ some familiarity with Linux.
++ NAT ([[https://en.wikipedia.org/wiki/Network_address_translation][Network Address Translation]]).
 
 I will link the more advanced things as the post unfolds.
 
@@ -388,11 +382,7 @@ interface:
 #+END_EXAMPLE
 
 And this is the current situation:
-
-[[file:detail-veth.svg]]
-
-Now we want do to the very same thing with another container. So let's create it
-from the same root filesystem:
+[[file:detail-veth.svg]] Now we want do to the very same thing with another container. So let's create it from the same root filesystem:
 #+BEGIN_EXAMPLE
   unshare -pmn -f chroot rootfs /usr/bin/env -i \
       HOME=/root \
@@ -419,7 +409,213 @@ before:
   ip link set eth0 up
 #+END_EXAMPLE
 
-Note that I'm using another IP address in the 172.19.35/24 subnet.
+Note that I'm using another IP address in the 172.19.35/24 subnet. This is the
+situation right now:
+
+*TODO: schema here*
+
+What we need to do here is try to link those two veth pairs together, in a way
+that they can communicate at layer 2. Something like... a [[ ip link set dev lo up MAC=$(ip addr show dev veth3 | grep 'link/ether' | tr -s ' ' | cut -d' ' -f3) ip link set dev veth3 name eth0 address $MAC ip addr add dev eth0 172.19.35.3/24 ip link set eth0 up ][bridge]]! It will take
+care of linking together two network segments. It works at level 2 like a switch
+(so it basically "talks Ethernet"), by "enslaving" existing interfaces. You add
+a bunch of interfaces into a bridge, and they will be communicating with each
+other thanks to the bridge.
+
+Let's create the bridge and put the two veth interfaces still on the host
+networking:
+#+BEGIN_EXAMPLE
+  ip link add br0 type bridge
+  ip link set veth0 master br0
+  ip link set veth2 master br0
+#+END_EXAMPLE
+
+Now let's give the bridge an address and bring it up:
+#+BEGIN_EXAMPLE
+  ip addr add dev br0 172.19.35.1/24
+  ip link set br0 up
+#+END_EXAMPLE
+
+Now we have this topology in place:
+
+*TODO: schema here*
+
+As you can see, now the containers can ping each other:
+#+BEGIN_EXAMPLE
+  / # ping 172.19.35.3 -c1
+  PING 172.19.35.3 (172.19.35.3): 56 data bytes
+  64 bytes from 172.19.35.3: seq=0 ttl=64 time=0.046 ms
+
+  --- 172.19.35.3 ping statistics ---
+  1 packets transmitted, 1 packets received, 0% packet loss
+  round-trip min/avg/max = 0.046/0.046/0.046 ms
+#+END_EXAMPLE
+
+Let's check the ARP table[fn:11] on the first container:
+#+BEGIN_EXAMPLE
+  / # ip neigh
+  172.19.35.3 dev eth0 lladdr c6:b3:e3:1d:97:7b used 40/35/10 probes 1 STALE
+#+END_EXAMPLE
+
+So this means that these two containers are on the same network, and can talk to
+each other at level 2. And here is indeed the ARP request going through:
+
+#+BEGIN_EXAMPLE
+  [root@node001 ~]# tcpdump -i any host 172.19.35.3
+  22:55:37.858611 ARP, Request who-has 172.19.35.3 tell 172.19.35.2, length 28
+  22:55:37.858639 ARP, Reply 172.19.35.3 is-at c6:b3:e3:1d:97:7b (oui Unknown), length 28
+#+END_EXAMPLE
+
+** Reach the internet
+If you try to reach the external network, or even the host IP, you'll see that
+it's still not working. That's because to reach a different network you need
+some kind of level 3 communication. The way Docker sets it up by default is with
+natting.[fn:12] In this way, the 172.19.35/24 network will be invisible outside
+the host and mapped automatically into the host IP address, that in my case is
+10.141.0.1 (which by the way is still a private IP, and will be natted by the
+head node into the public IP).
+
+Let's first enable IP forwarding, to allow the host to perform routing
+operations:
+#+BEGIN_EXAMPLE
+  echo 1 > /proc/sys/net/ipv4/ip_forward
+#+END_EXAMPLE
+
+Then insert a NAT rule (also called IP masquerade) in the external interface:
+#+BEGIN_EXAMPLE
+  iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+#+END_EXAMPLE
+
+Then you need to set the default route in the container:
+#+BEGIN_EXAMPLE
+  ip route add default via 172.19.36.1
+#+END_EXAMPLE
+
+In this way any packet with an unknown destination will be sent through the
+gateway, which is the bridge. From there it will be natted by eth0, our physical
+interface, and then sent to the Internet by using the physical IP as source.
+
+This is now the situation:
+
+*TODO: insert here schema*
+
+If I ping Google's DNS from the container, I see this from the host:
+#+BEGIN_EXAMPLE
+  [root@node001 ~]# tcpdump -i any host 8.8.8.8 -n
+  23:27:51.234333 IP 172.19.35.2 > 8.8.8.8: ICMP echo request, id 13824, seq 0, length 64
+  23:27:51.234360 IP 10.141.0.1 > 8.8.8.8: ICMP echo request, id 13824, seq 0, length 64
+  23:27:51.242230 IP 8.8.8.8 > 10.141.0.1: ICMP echo reply, id 13824, seq 0, length 64
+  23:27:51.242251 IP 8.8.8.8 > 172.19.35.2: ICMP echo reply, id 13824, seq 0, length 64
+#+END_EXAMPLE
+
+As you can see the packet comes from the container, it's translated into the
+host IP (10.141.0.1) and then when it comes back, the destination is replaced
+with the container IP (172.19.35.2).
+
+This is what I see from the head node, instead:
+#+BEGIN_EXAMPLE
+  [root@head ~]# tcpdump -i any host 8.8.8.8 -n
+  23:25:20.209922 IP 10.141.0.1 > 8.8.8.8: ICMP echo request, id 13568, seq 0, length 64
+  23:25:20.209943 IP 192.168.200.172 > 8.8.8.8: ICMP echo request, id 13568, seq 0, length 64
+  23:25:20.217286 IP 8.8.8.8 > 192.168.200.172: ICMP echo reply, id 13568, seq 0, length 64
+  23:25:20.217310 IP 8.8.8.8 > 10.141.0.1: ICMP echo reply, id 13568, seq 0, length 64
+#+END_EXAMPLE
+
+As you can see the packet comes from the node, it's forwarded through the head
+node public IP (192.168.200.172), and then comes back the other way around. NAT
+is also working here.
+
+** Reach a remote container
+Now, from a container we are able to communicate with another local container
+and also with the Internet. The next step is to reach a container in another
+node, in the same physical private network (which I remind you is 10.141/16).
+
+This is basically the plan:
+[[file:general.svg]]
+
+The two nodes communicate through the physical private network 10.141/16. We
+want to assign a subnet to each node, so any of them will be able to host some
+containers. We have already assigned the 172.19.35/24 network to the first host.
+We can then assign another to the second. Something like 172.19.36/24. I could
+have chosen any other IP range that didn't conflict with the existing networks,
+but this one is especially handy, because both of them are part of a bigger
+172.19/16 network. We can think of it as the containers' network, in which every
+host gets a slice (a /24 subnet). This means that we can assign ~24 - 16 = 8~
+bits to different hosts, so maximum 255 nodes. Of course you can use different
+network sizes to accomodate your needs, but that's the way we are going to set
+it up here.
+
+Let's go real quick over the second host, create a container, setup the
+networking there as we did for the first host:
+#+BEGIN_EXAMPLE
+  unshare -pmn -f chroot rootfs /usr/bin/env -i \
+      HOME=/root \
+      PATH=/bin:/usr/bin:/sbin:/usr/sbin \
+      /bin/ash -l
+#+END_EXAMPLE
+
+then in the host:
+#+BEGIN_EXAMPLE
+  CPID=$(ps -C ash -o pid= | tr -d ' ')
+  ip link add veth0 type veth peer name veth1
+  ip link set veth1 netns $CPID
+  ip link set dev veth0 up
+  ip link add br0 type bridge
+  ip link set veth0 master br0
+  ip addr add dev br0 172.19.36.1/24
+  ip link set br0 up
+  echo 1 > /proc/sys/net/ipv4/ip_forward
+  iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+#+END_EXAMPLE
+
+Note that I used the 172.19.36.1/24 IP for the bridge. Then in the container:
+#+BEGIN_EXAMPLE
+  ip link set dev lo up
+  MAC=$(ip addr show dev veth1 | grep 'link/ether' | tr -s ' ' | cut -d' ' -f3)
+  ip link set dev veth1 name eth0 address $MAC
+  ip addr add dev eth0 172.19.36.2/24
+  ip link set eth0 up
+  ip route add default via 172.19.36.1
+#+END_EXAMPLE
+
+and again I use 172.19.36/24 here. Now the container is able to talk to the
+Internet, as the other one. But, is the first container able to reach this new
+container?
+
+Try to think about it.
+
+Then try to do it. No, it doesn't work, but why? The answer is in the routing
+table of the first host:
+#+BEGIN_EXAMPLE
+  [root@node001 ~]# ip r
+  default via 10.141.255.254 dev eth0
+  10.141.0.0/16 dev eth0  proto kernel  scope link  src 10.141.0.1
+  172.19.35.0/24 dev br0  proto kernel  scope link  src 172.19.35.1
+#+END_EXAMPLE
+
+There is the default gateway to the head node, and two "scope link" ranges, for
+networks reachable at level 2 (unsurprisingly there are the 10.141/16 physical
+network, and the 172.19.35/24 network for the local containers). As you can see
+there's no rule for 172.19.26/24. This means the packet will go through the
+default gateway, and there it will try to go outside, because the head node
+doesn't know anything about this IP either.
+
+So, what we should do is to add a routing rule to your table, telling that any
+packet for 172.19.36/24 should be forwarded to the second host, listening at
+10.141.0.2:
+#+BEGIN_EXAMPLE
+  ip route add 172.19.36.0/24 via 10.141.0.2 src 10.141.0.1
+#+END_EXAMPLE
+
+The same goes for the other host, but in reverse:
+#+BEGIN_EXAMPLE
+  ip route add 172.19.35.0/24 via 10.141.0.1 src 10.141.0.2
+#+END_EXAMPLE
+
+And now, both containers are able to talk to each other. If you want to show
+something fancy, you could run NGINX in one container, and =curl= the beautiful
+default page from the other.
+
+Hooray!
 
 * Bonus 1: Calico
 * Bonus 2: Debugging container networking
@@ -456,3 +652,18 @@ the host. I'm using =top= here:
 #+BEGIN_EXAMPLE
   CPID2=$(ps -C ash -o ppid= | tr -d ' ')
 #+END_EXAMPLE
+
+[fn:11] The [[https://en.wikipedia.org/wiki/Address_Resolution_Protocol][Address Resolution Protocol]] is responsible for translating IP
+addresses into MAC addresses. Every time a network device wants to communicate
+with an IP in the same subnet, the ARP protocol kicks in. It basically sends a
+broadcast packet asking to everybody: "how has this IP?", and it saves the
+answer (IP address, MAC address) into a table. This way every time you need to
+reach that IP, you know already which MAC address to contact.
+
+[fn:12] [[https://en.wikipedia.org/wiki/Network_address_translation][Network Address Translation]]. This is the same mechanism your home router
+uses to connect you to the Internet. It basically maps all the internal network
+IPs into the only one that is externally available, and assigned to you by your
+ISP. Externally, only the router IP will be visible. So, when a packet is sent
+outside, the source address is rewritten to match the router external IP. When
+the reply comes back, the natting does the reverse, and replaces the destination
+address with the original source of the packet.
