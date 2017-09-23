@@ -618,8 +618,168 @@ default page from the other.
 Hooray!
 
 * Bonus 1: Calico
+What I showed in the last section is basically how Docker sets up its bridge
+networking. The routing rules to make the containers see each other come from
+me. What Docker Swarm and other networking solutions for Docker use instead is
+usually overlay networking, like [[https://en.wikipedia.org/wiki/Virtual_Extensible_LAN][VXLAN]]. VXLAN encapsulate layer 2 Ethernet
+frames within layer 3 UDP packets. This provides layer 2 visibility to
+containers across hosts. I didn't show this approach because the routing rules
+were simpler, and also because I prefer the Calico approach, that I will present
+in this section.
+
+Some of you may already know [[https://kubernetes.io/][Kubernetes]]. It's the most popular (any my favorite)
+container orchestrator. What it basically does is providing declarative APIs to
+manage containers. [[https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/#restart-policy][Restarts]] upon failures, [[https://kubernetes.io/docs/concepts/workloads/controllers/replicaset/][replica's scaling]], [[https://kubernetes.io/docs/concepts/workloads/controllers/deployment/][upgrading]],
+[[https://kubernetes.io/docs/concepts/services-networking/ingress/][ingress]], and [[https://kubernetes.io/docs/concepts/services-networking/network-policies/][many]] [[https://kubernetes.io/docs/concepts/api-extension/custom-resources/][other]] [[https://kubernetes.io/docs/concepts/workloads/controllers/statefulset/][things]] can be managed automatically by Kubernetes. For
+all this magic to happen, Kubernetes imposes some restrictions on the underlying
+infrastructure. Here is the section about the [[https://kubernetes.io/docs/concepts/cluster-administration/networking/#kubernetes-model][networking model]]:
++ all containers can communicate with all other containers without NAT
++ all nodes can communicate with all containers (and vice-versa) without NAT
++ the IP that a container sees itself as is the same IP that others see it as.
+
+As the documentation says:
+#+BEGIN_QUOTE
+  Coordinating ports across multiple developers is very difficult to do at scale
+  and exposes users to cluster-level issues outside of their control. Dynamic
+  port allocation brings a lot of complications to the system - every
+  application has to take ports as flags, the API servers have to know how to
+  insert dynamic port numbers into configuration blocks, services have to know
+  how to find each other, etc. Rather than deal with this, Kubernetes takes a
+  different approach.
+#+END_QUOTE
+
+The solution we used in the previous section does not satisfy these
+requirements. In our case the source IP is rewritten by the NAT, so the
+destination container sees only the host IP.
+
+There are a number of projects that implement the Kubernetes mode, and I really
+like [[https://www.projectcalico.org//][Project Calico]], so I'm going to reproduce its setup here, again the hard
+way, just Linux commands.
+
+The Calico solution is to use layer 3 networking all the way up to the
+containers. No Docker bridges, no NAT, just pure routing rules and iptables.
+Interestingly enough, the way Calico distributes the routing rules is through
+[[https://en.wikipedia.org/wiki/Border_Gateway_Protocol][BGP]],[fn:13] which is the same way the Internet works.
+
+The end result we're going to aim at is this:
+
+[[file:general.svg]]
+
+Looks familiar? Yes, it's the same as the one I used in the previous section. We
+still use the same IP ranges: the host networking under 10.141/16, and we're
+going to setup a 172.19/16 network for the containers. As before, every host
+gets a /24 subnet. The difference is in the way the packets are routed. With
+Calico on the wire you'll see packets coming from a 172.19/16 address and going
+to a 172.19/16 address because, as I said before, no natting or overlays are
+used.
+
+Without further ado, let's create our container on the first host:
+#+BEGIN_EXAMPLE
+  unshare -pmn -f chroot rootfs /usr/bin/env -i \
+      HOME=/root \
+      PATH=/bin:/usr/bin:/sbin:/usr/sbin \
+      /bin/ash -l
+#+END_EXAMPLE
+
+Then, let's create our veth pair, and assign one end to the container:
+#+BEGIN_EXAMPLE
+  CPID=$(ps -C ash -o pid= | tr -d ' ')
+  ip link add veth0 type veth peer name veth1
+  ip link set veth1 netns $CPID
+  ip link set dev veth0 up
+#+END_EXAMPLE
+
+Let's now give the container an IP address:
+#+BEGIN_EXAMPLE
+  ip link set dev lo up
+  MAC=$(ip addr show dev veth1 | grep 'link/ether' | tr -s ' ' | cut -d' ' -f3)
+  ip link set dev veth1 name eth0 address $MAC
+  ip addr add dev eth0 172.19.35.2/32
+  ip link set eth0 up
+#+END_EXAMPLE
+
+Have you noted anything strange? I'm using a /32 for the container. This means
+that whenever I send a packet, even for a container living on the same host, it
+will need to go through level 3. This allows to get rid of the bridge, and also
+makes sure that the container doesn't try (and fail) to reach another at
+level 2, by sending useless ARP requests.
+
+Now on the host we need to enable [[https://en.wikipedia.org/wiki/Proxy_ARP][ARP proxy]] for the veth interface.
+#+BEGIN_EXAMPLE
+  echo 1 > /proc/sys/net/ipv4/conf/veth0/rp_filter
+  echo 1 > /proc/sys/net/ipv4/conf/veth0/route_localnet
+  echo 1 >/proc/sys/net/ipv4/conf/veth0/proxy_arp
+  echo 0 >/proc/sys/net/ipv4/neigh/veth0/proxy_delay
+  echo 1 >/proc/sys/net/ipv4/conf/veth0/forwarding
+#+END_EXAMPLE
+
+What this does is basically replying to ARP requests with its own MAC address.
+In this way, when the host looks for our container, veth0 will say: "it's me!",
+even though it's not, and when the packet comes to it, it will get copied to the
+other end of the pair... where our container is listening.[fn:14]
+
+We also need to enable IP forwarding for the physical interface, to allow
+routing:
+#+BEGIN_EXAMPLE
+  echo 1 >/proc/sys/net/ipv4/conf/eth0/forwarding
+#+END_EXAMPLE
+
+And inside the container we have to add a couple of routing rules:
+#+BEGIN_EXAMPLE
+  ip r add 169.254.1.1 dev eth0  scope link
+  ip r add default via 169.254.1.1 dev eth0
+#+END_EXAMPLE
+
+Here we use a [[https://tools.ietf.org/html/rfc3927][local link address]], so we don't have to manage the IP of the other
+pair of the veth. We can assign the same address to all the veths, since the
+address is valid only within the link, so no routing will be performed by the
+kernel. We've also added a default route, that says to use that IP for any
+address outside of the local range. But since our local range is a /32, no IP is
+local. So, what we are saying to the kernel in the end is: "any time we want to
+reach something outside the container, just put it on the eth0 link". It seems
+convoluted, but the idea behind it is quite simple.
+
+Last bit missing on the host is the rule to reach the container from the host:
+#+BEGIN_EXAMPLE
+  ip r add 172.19.35.2 dev veth0 scope link
+#+END_EXAMPLE
+
+With this we're saying that to reach the container the packet has to go through
+the veth0 interface.
+
+Now, from the container we're able to ping the host:
+#+BEGIN_EXAMPLE
+  node001:/# ping 10.141.0.1 -c1
+  PING 10.141.0.1 (10.141.0.1): 56 data bytes
+  64 bytes from 10.141.0.1: seq=0 ttl=64 time=0.077 ms
+
+  --- 10.141.0.1 ping statistics ---
+  1 packets transmitted, 1 packets received, 0% packet loss
+  round-trip min/avg/max = 0.077/0.077/0.077 ms
+#+END_EXAMPLE
+
+and if you look at the ARP table you'll see ARP proxy in action:
+#+BEGIN_EXAMPLE
+  node001:/# ip neigh
+  10.141.0.1 dev eth0 lladdr 92:8b:a1:58:b6:81 used 651/711/35 probes 0 STALE
+  169.254.1.1 dev eth0 lladdr 92:8b:a1:58:b6:81 used 40/35/13 probes 1 STALE
+#+END_EXAMPLE
+
+*THIS shouldn't be the case.... to investigate why*
+
+
+You see? Both the host and the local link address (the other end of the veth
+pair) are seen with the same MAC address.
+
+*At the end*
+
+Among the feature that I haven't discussed, Calico has also a really nice
+distributed firewall, applied through iptables, but I left it out of scope from
+this post.
+
 * Bonus 2: Debugging container networking
 * Concluding remarks
+
 * Footnotes
 
 [fn:1] I run my laptop with [[https://www.archlinux.org/][Arch Linux]] and I used [[https://www.centos.org/][CentOS 7]] for my demo cluster.
@@ -667,3 +827,57 @@ ISP. Externally, only the router IP will be visible. So, when a packet is sent
 outside, the source address is rewritten to match the router external IP. When
 the reply comes back, the natting does the reverse, and replaces the destination
 address with the original source of the packet.
+
+[fn:13] See also [[https://docs.projectcalico.org/v2.5/reference/architecture/data-path][the Calico data path]] for some details.
+
+[fn:14] Some nice comments are present in the Calico source code about it. See
+=intdataplane/endpoint_mgr.go=:
+
+#+BEGIN_SRC go
+  // Enable strict reverse-path filtering.  This prevents a workload from spoofing its
+  // IP address.  Non-privileged containers have additional anti-spoofing protection
+  // but VM workloads, for example, can easily spoof their IP.
+  err := m.writeProcSys(fmt.Sprintf("/proc/sys/net/ipv4/conf/%s/rp_filter", name), "1")
+  if err != nil {
+    return err
+  }
+  // Enable routing to localhost.  This is required to allow for NAT to the local
+  // host.
+  err = m.writeProcSys(fmt.Sprintf("/proc/sys/net/ipv4/conf/%s/route_localnet", name), "1")
+  if err != nil {
+    return err
+  }
+  // Enable proxy ARP, this makes the host respond to all ARP requests with its own
+  // MAC.  This has a couple of advantages:
+  //
+  // - In OpenStack, we're forced to configure the guest's networking using DHCP.
+  //   Since DHCP requires a subnet and gateway, representing the Calico network
+  //   in the natural way would lose a lot of IP addresses.  For IPv4, we'd have to
+  //   advertise a distinct /30 to each guest, which would use up 4 IPs per guest.
+  //   Using proxy ARP, we can advertise the whole pool to each guest as its subnet
+  //   but have the host respond to all ARP requests and route all the traffic whether
+  //   it is on or off subnet.
+  //
+  // - For containers, we install explicit routes into the containers network
+  //   namespace and we use a link-local address for the gateway.  Turing on proxy ARP
+  //   means that we don't need to assign the link local address explicitly to each
+  //   host side of the veth, which is one fewer thing to maintain and one fewer
+  //   thing we may clash over.
+  err = m.writeProcSys(fmt.Sprintf("/proc/sys/net/ipv4/conf/%s/proxy_arp", name), "1")
+  if err != nil {
+    return err
+  }
+  // Normally, the kernel has a delay before responding to proxy ARP but we know
+  // that's not needed in a Calico network so we disable it.
+  err = m.writeProcSys(fmt.Sprintf("/proc/sys/net/ipv4/neigh/%s/proxy_delay", name), "0")
+  if err != nil {
+    return err
+  }
+  // Enable IP forwarding of packets coming _from_ this interface.  For packets to
+  // be forwarded in both directions we need this flag to be set on the fabric-facing
+  // interface too (or for the global default to be set).
+  err = m.writeProcSys(fmt.Sprintf("/proc/sys/net/ipv4/conf/%s/forwarding", name), "1")
+  if err != nil {
+    return err
+  }
+#+END_SRC
