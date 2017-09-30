@@ -673,6 +673,7 @@ Calico on the wire you'll see packets coming from a 172.19/16 address and going
 to a 172.19/16 address because, as I said before, no natting or overlays are
 used.
 
+** Setup the host network
 Without further ado, let's create our container on the first host:
 #+BEGIN_EXAMPLE
   unshare -pmn -f chroot rootfs /usr/bin/env -i \
@@ -718,7 +719,7 @@ In this way, when the host looks for our container, veth0 will say: "it's me!",
 even though it's not, and when the packet comes to it, it will get copied to the
 other end of the pair... where our container is listening.[fn:14]
 
-We also need to enable IP forwarding for the physical interface, to allow
+We also need to enable IP forwarding on the host's physical interface, to allow
 routing:
 #+BEGIN_EXAMPLE
   echo 1 >/proc/sys/net/ipv4/conf/eth0/forwarding
@@ -758,27 +759,214 @@ Now, from the container we're able to ping the host:
   round-trip min/avg/max = 0.077/0.077/0.077 ms
 #+END_EXAMPLE
 
-and if you look at the ARP table you'll see ARP proxy in action:
+And this is the traffic passing:
 #+BEGIN_EXAMPLE
-  node001:/# ip neigh
-  10.141.0.1 dev eth0 lladdr 92:8b:a1:58:b6:81 used 651/711/35 probes 0 STALE
-  169.254.1.1 dev eth0 lladdr 92:8b:a1:58:b6:81 used 40/35/13 probes 1 STALE
+  [root@node001 ~]# tcpdump -i any host 172.19.35.2
+  16:25:10.439980 IP 172.19.35.2 > node001.cm.cluster: ICMP echo request, id 6144, seq 0, length 64
+  16:25:10.440014 IP node001.cm.cluster > 172.19.35.2: ICMP echo reply, id 6144, seq 0, length 64
 #+END_EXAMPLE
 
-*THIS shouldn't be the case.... to investigate why*
+ARP goes back and forth to determine the physical address of the local link IP:
+#+BEGIN_EXAMPLE
+  [root@node001 ~]# tcpdump -i any host 172.19.35.2
+  16:25:15.453847 ARP, Request who-has 169.254.1.1 tell 172.19.35.2, length 28
+  16:25:15.453882 ARP, Reply 169.254.1.1 is-at f6:5c:53:b4:f8:03 (oui Unknown), length 28
+#+END_EXAMPLE
 
+and if you look at the ARP table you'll see the cached reply:
+#+BEGIN_EXAMPLE
+  node001:/# ip neigh
+  169.254.1.1 dev eth0 lladdr f6:5c:53:b4:f8:03 ref 1 used 2/2/2 probes 4 REACHABLE
+#+END_EXAMPLE
 
-You see? Both the host and the local link address (the other end of the veth
-pair) are seen with the same MAC address.
+The 169.254.1.1 IP is the only one reachable at level 2 from the container, as
+expected. The MAC address corresponds to the other end of the veth pair, as you
+can see from the host:
+#+BEGIN_EXAMPLE
+  [root@node001 ~]# ip l show dev veth0
+  5: veth0@if4: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc pfifo_fast state UP mode DEFAULT qlen 1000
+      link/ether f6:5c:53:b4:f8:03 brd ff:ff:ff:ff:ff:ff link-netnsid 0
+#+END_EXAMPLE
 
-*At the end*
+Another detail is the blackhole route, to drop packets coming for unexisting containers:
+#+BEGIN_EXAMPLE
+  ip r add blackhole 172.19.35.0/24
+#+END_EXAMPLE
 
-Among the feature that I haven't discussed, Calico has also a really nice
-distributed firewall, applied through iptables, but I left it out of scope from
-this post.
+In this way any packet that is not sent to a specific container is be dropped.
+Packets for containers still work, because their routing rules are more
+specific, so they take precedence:
+#+BEGIN_EXAMPLE
+  [root@node001 ~]# ip r
+  default via 10.141.255.254 dev eth0
+  10.141.0.0/16 dev eth0  proto kernel  scope link  src 10.141.0.1
+  169.254.0.0/16 dev eth0  scope link  metric 1002
+  blackhole 172.19.35.0/24
+  172.19.35.2 dev veth0  scope link
+#+END_EXAMPLE
 
-* Bonus 2: Debugging container networking
+** Reach a remote container
+To reach a container living in another host, you have to replicate the setup
+done for this host. You have to assign to that node another /24 slice from the
+container network, and use one IP from that slice to create a container (I used
+the 172.19.36/24 subnet, the same as Part 2).[fn:15]
+
+Then you need to add the routing rules to direct the traffic to the right host.
+From the first host:
+#+BEGIN_EXAMPLE
+  ip route add 172.19.36.0/24 via 10.141.0.2 src 10.141.0.1
+#+END_EXAMPLE
+
+and similarly from the second host:
+#+BEGIN_EXAMPLE
+  ip route add 172.19.35.0/24 via 10.141.0.1 src 10.141.0.2
+#+END_EXAMPLE
+
+Done. Now the containers can reach each other. If you look at the traffic,
+you'll see that the source and destination IPs are preserved, and not NATted,
+satisfying Kubernetes' requirements:
+#+BEGIN_EXAMPLE
+  [root@node001 ~]# tcpdump -i any host 172.19.35.2
+  20:08:02.154031 IP 172.19.35.2 > 172.19.36.2: ICMP echo request, id 17152, seq 0, length 64
+  20:08:02.154045 IP 172.19.35.2 > 172.19.36.2: ICMP echo request, id 17152, seq 0, length 64
+  20:08:02.155088 IP 172.19.36.2 > 172.19.35.2: ICMP echo reply, id 17152, seq 0, length 64
+  20:08:02.155098 IP 172.19.36.2 > 172.19.35.2: ICMP echo reply, id 17152, seq 0, length 64
+#+END_EXAMPLE
+
+Clean IPs are being used here. Success!
+
+** Reach the Internet
+If you are lucky you are able to reach the external network already. This all
+depends on how NAT is setup in your cluster. A proper setup should allow only
+packets coming from the physical network to escape.
+
+From my head node (that is also the default gateway of my physical machine), I
+see:
+#+BEGIN_EXAMPLE
+  [root@mbrt-c-08-13-t-c7u2 ~]# iptables -L -t nat
+  Chain PREROUTING (policy ACCEPT)
+  target     prot opt source               destination
+
+  Chain INPUT (policy ACCEPT)
+  target     prot opt source               destination
+
+  Chain OUTPUT (policy ACCEPT)
+  target     prot opt source               destination
+
+  Chain POSTROUTING (policy ACCEPT)
+  target     prot opt source               destination
+  MASQUERADE  all  --  10.141.0.0/16        anywhere
+#+END_EXAMPLE
+
+This is precisely my case. To allow then to NAT also packets coming from the
+containers network, I have to add another rule:
+#+BEGIN_EXAMPLE
+  iptables -t nat -A POSTROUTING -o eth1 -j MASQUERADE -s 172.19.0.0/16
+#+END_EXAMPLE
+
+so now, also this rule is present:
+#+BEGIN_EXAMPLE
+  MASQUERADE  all  --  172.19.0.0/16        anywhere
+#+END_EXAMPLE
+
+and we need a routing rule to be able to reach the physical machine hosting the
+containers:
+#+BEGIN_EXAMPLE
+  ip route add 172.19.35.0/24 via 10.141.0.1 src 10.141.255.254
+#+END_EXAMPLE
+
+And now, you can finally ping the outside network from the container!
+
+** Missing pieces
+Among the feature that I haven't discussed, Calico has a really nice distributed
+firewall, applied through iptables, but I left it out of scope from this post.
+
+* Bonus 2: Debug container networking
+In this section I would like to digress a bit and talk about debugging. I hope
+it's clear at this point that containers aren't magical, and networking isn't
+magical either. This means that for debugging you can use all the regular tools
+Linux provides. You don't need to rely on Docker or Calico to provide anything
+on their end, and even if they would, how do you debug them when they are
+broken? In the previous section I used =ping=, =iproute= and =tcpdump=, but what
+happens if your Docker image does not contain these tools?
+#+BEGIN_EXAMPLE
+  node001:/# ip r
+  /bin/ash: ip: not found
+#+END_EXAMPLE
+
+This happens many times, and even worse if your docker image looks like this:
+#+BEGIN_EXAMPLE
+  FROM scratch
+  ADD main /
+  CMD ["/main"]
+#+END_EXAMPLE
+
+You don't even have a console there. What do you do?
+
+** Enter the =nsenter= magical world
+There is a very simple trick you should probably keep in mind: =nsenter=. This
+command enters one or more namespaces from the host. You can enter all of them
+and in that case you would have another console open on the container (similar
+to the [[https://docs.docker.com/engine/reference/commandline/exec/][docker exec]] command):
+#+BEGIN_EXAMPLE
+  nsenter --pid=/proc/$CPID/ns/pid \
+          --net=/proc/$CPID/ns/net \
+          --mount=/proc/$CPID/ns/mnt \
+          /bin/bash
+#+END_EXAMPLE
+
+and look, we see the same processes:
+#+BEGIN_EXAMPLE
+  [root@node001 rootfs]# mount -t proc proc /proc
+  [root@node001 rootfs]# ps aux
+  USER       PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND
+  root         1  0.0  0.0   1540   548 pts/0    S+   16:19   0:00 /bin/ash -l
+  root        97  0.0  0.2 116144  2908 pts/1    S    20:25   0:00 /bin/bash
+  root       127  0.0  0.1 139492  1620 pts/1    R+   20:28   0:00 ps aux
+#+END_EXAMPLE
+
+What's most important for our purposes is accessing the network namespace:
+#+BEGIN_EXAMPLE
+  nsenter --net=/proc/$CPID/ns/net /bin/bash
+#+END_EXAMPLE
+
+this way you have the same network as the container, but no other restrictions.
+In particular you have access to the host filesystem:
+#+BEGIN_EXAMPLE
+  [root@node001 ~]# cat /etc/os-release
+  NAME="CentOS Linux"
+  VERSION="7 (Core)"
+  ID="centos"
+  ID_LIKE="rhel fedora"
+  VERSION_ID="7"
+  PRETTY_NAME="CentOS Linux 7 (Core)"
+  ...
+#+END_EXAMPLE
+
+and all the tools installed. But the network you see is the container one:
+#+BEGIN_EXAMPLE
+  [root@node001 ~]# ip r
+  default via 169.254.1.1 dev eth0
+  169.254.1.1 dev eth0  scope link
+#+END_EXAMPLE
+
+This, of course works with Docker too. Once you have the PID of your container,
+you can =nsenter= it:
+#+BEGIN_EXAMPLE
+  [root@node001 ~]# docker inspect --format '{{.State.Pid}}' my-awesome-container
+  24028
+  [root@node001 ~]#n senter --net=/proc/24028/ns/net /bin/bash
+#+END_EXAMPLE
+
+So, please, don't install debugging tools in your Docker images anymore. It's
+not really necessary.
+
 * Concluding remarks
+With this long post I tried to reproduce two different solutions for container
+networking, with nothing more than Linux commands. I hope this helps to
+understand a bit and remove some of the magic that seems to happen when
+containers talk to each other. It helped me for sure, and now I'm much more
+confident in my debugging when something goes wrong at the networking level.
 
 * Footnotes
 
@@ -881,3 +1069,38 @@ address with the original source of the packet.
     return err
   }
 #+END_SRC
+
+[fn:15] For the lazy reader I reported the whole sequence here. Create the container:
+#+BEGIN_EXAMPLE
+  unshare -pmn -f chroot rootfs /usr/bin/env -i \
+      HOME=/root \
+      PATH=/bin:/usr/bin:/sbin:/usr/sbin \
+      /bin/ash -l
+#+END_EXAMPLE
+
+Then from the host:
+#+BEGIN_EXAMPLE
+  CPID=$(ps -C ash -o pid= | tr -d ' ')
+  ip link add veth0 type veth peer name veth1
+  ip link set veth1 netns $CPID
+  ip link set dev veth0 up
+  echo 1 > /proc/sys/net/ipv4/conf/veth0/rp_filter
+  echo 1 > /proc/sys/net/ipv4/conf/veth0/route_localnet
+  echo 1 >/proc/sys/net/ipv4/conf/veth0/proxy_arp
+  echo 0 >/proc/sys/net/ipv4/neigh/veth0/proxy_delay
+  echo 1 >/proc/sys/net/ipv4/conf/veth0/forwarding
+  echo 1 >/proc/sys/net/ipv4/conf/eth0/forwarding
+  ip r add 172.19.36.2 dev veth0 scope link
+  ip r add blackhole 172.19.36.0/24
+#+END_EXAMPLE
+
+and from the container:
+#+BEGIN_EXAMPLE
+  ip link set dev lo up
+  MAC=$(ip addr show dev veth1 | grep 'link/ether' | tr -s ' ' | cut -d' ' -f3)
+  ip link set dev veth1 name eth0 address $MAC
+  ip addr add dev eth0 172.19.36.2/32
+  ip link set eth0 up
+  ip r add 169.254.1.1 dev eth0  scope link
+  ip r add default via 169.254.1.1 dev eth0
+#+END_EXAMPLE
