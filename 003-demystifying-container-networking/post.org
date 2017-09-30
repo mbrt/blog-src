@@ -3,38 +3,37 @@
 # to get rid of the '_' subscript problem
 #+OPTIONS: ^:{}
 
-With my current employer I had the chance to debug and understand better how
-containers work. We had to solve some networking problems a customer had with
-[[https://kubernetes.io/][Kubernetes]], and I got hooked up. After solving the problem, I spent more time on
-investigating what actually makes a container after all. After seeing the
-wonderful talks by [[https://youtu.be/wyqoi52k5jM][Eric Chiang]] and [[https://youtu.be/b3XDl0YsVsg][Laurent Bernaille]], and reading through the
-very informative posts by [[https://blog.lizzie.io/linux-containers-in-500-loc.html][Lizzie Dixon]] and [[http://jvns.ca/blog/2016/10/10/what-even-is-a-container/][Julia Evans]] (that I really really
-recommend), I got enough information about how a container is created and
-managed. I'm going to rip off and mix some stuff from their awesome posts in the
-first part of this post.
+Over the last year, at work I had multiple chances to debug how containers work.
+Recently we had to solve some networking problems a customer had with
+[[https://kubernetes.io/][Kubernetes]], and I decided I wanted to know more. Once the problem was solved, I
+spent more time on investigating what is actually going on under the hood. After
+seeing the wonderful [[https://youtu.be/wyqoi52k5jM][Eric Chiang]] and [[https://youtu.be/b3XDl0YsVsg][Laurent Bernaille]] talks, and reading
+through the very informative posts by [[https://blog.lizzie.io/linux-containers-in-500-loc.html][Lizzie Dixon]] and [[http://jvns.ca/blog/2016/10/10/what-even-is-a-container/][Julia Evans]] (that I
+really really recommend), I got enough information about how a container is
+created and managed. I'm going to rip off and mix some stuff from their awesome
+posts in the first part of mine.
 
 What I missed in those talks was the networking part. How do containers talk to
-each other? In Bernaille's post there is some information, but I after seeing
+each other? In Bernaille's talk there is some information, but I after seeing
 the video I was still not convinced completely. I was especially interested
 about how [[https://www.projectcalico.org/][Calico]] works, and for that I could find very little information.
 
 To answer this kind of questions I will try to create containers from scratch,
-by using just standard Linux commands and I will also create the required
-networking to make them happily communicate.
-
-I like this approach because it gets low level enough to demystify things that
-look very complicated, while it's just a matter of spending some time to
-understand the basics.
+by using just standard Linux commands. I will also setup the networking to make
+them happily communicate, again from scratch. I like this approach because it
+gets low level enough to demystify things that look very complicated, while it's
+just a matter of spending some time to understand the basics.
 
 This post is an extended version of a talk I gave internally at my company,
-trying to shed some light on the subject of containers networking.
+trying to shed some light on the subject.
 
-Prerequisites for a good understanding are some basic networking concepts, and Linux:
-+ IP networking, and in particular the [[https://en.wikipedia.org/wiki/Classless_Inter-Domain_Routing#CIDR_notation][CIDR notation]];
+Prerequisites for a good understanding are some basic networking and Linux
+concepts:
 + the [[https://en.wikipedia.org/wiki/OSI_model][OSI model]], and in particular level 2 and 3;
++ IP networking and the [[https://en.wikipedia.org/wiki/Classless_Inter-Domain_Routing#CIDR_notation][CIDR notation]];
 + NAT ([[https://en.wikipedia.org/wiki/Network_address_translation][Network Address Translation]]).
 
-I will link the more advanced things as the post unfolds.
+I will link the advanced topics as the post unfolds.
 
 * Part one: containers from scratch
 Rise your hand if you ever tried the magic of [[https://www.docker.com/][Docker]] at least once. You pull an
@@ -43,7 +42,7 @@ with different libraries and applications installed, and all of that in no time.
 But how magic is a container after all? Is it composed by very complicated
 tools? Is it a sort of virtual machine? In the first part of this post I'm going
 to create a container from scratch, by using only a Linux shell and standard
-Linux commands.
+Linux commands, to try to answer these questions.
 
 ** Prepare the image
 When you do a =docker pull= you are downloading a container image from the
@@ -54,12 +53,11 @@ the end result is just a root filesystem.
 So we can try to make our own, and for this post I decided to go with [[https://alpinelinux.org/][Alpine
 Linux]], because it's small and it's different from my distribution.[fn:1]
 Needless to say that for this to work you have to be running on Linux and with a
-fairly recent Kernel. I haven't checked the actual requirement, but if you
+fairly recent Kernel. I haven't checked the specific requirements, but if you
 updated your system in the last 5 years,[fn:2] you're probably good to go.
 
-Be powerful, be root. Save yourself problems and run these commands as root.
-You'll save yourself a lot of =sudo= invocations and "permission denied"
-messages:
+Be powerful, be root. You'll save yourself a lot of =sudo= invocations and
+annoying "permission denied" messages:
 #+BEGIN_EXAMPLE
   sudo su
 #+END_EXAMPLE
@@ -95,8 +93,8 @@ if you look there, you'll see the root filesystem:
 #+END_EXAMPLE
 
 ** chroot
-Now let's try to =chroot= there. In this way we create a process and change it's
-root directory to that one we just created:
+Now let's try to =chroot= there. In this way we create a process and change its
+root directory to the one we just created:
 #+BEGIN_EXAMPLE
   chroot rootfs /bin/ash
   export PATH=/bin:/usr/bin:/sbin
@@ -175,8 +173,7 @@ Not only that. Look at the network:
 
 You can see my WiFi card for example. I could change the IP, take it down, etc.
 Not nice. The answer is then NO, this is not a container, because it's not
-isolated enough. This is just a process that happens to see a different root
-filesystem.
+isolated enough. This is just a process in a different root filesystem.
 
 ** Namespaces
 Linux has namespaces to the rescue. As =man 7 namespaces= says:
@@ -191,7 +188,7 @@ Linux has namespaces to the rescue. As =man 7 namespaces= says:
 or in other words: we take a resource like the list of processes in the machine,
 we make an isolated copy of it, give it to our process and make sure that any
 change there is not reflected to the root process list. This is the PID
-namespace. Is it hard to set up? Judge yourself:
+namespace. Is it hard to set up? Judge by yourself:
 #+BEGIN_EXAMPLE
   unshare -p -f chroot rootfs /usr/bin/env -i \
       HOME=/root \
@@ -224,10 +221,10 @@ From the host you can instead see the containerized process:
   root      8552  0.0  0.0   1540   952 pts/3    S+   20:06   0:00 /bin/ash
 #+END_EXAMPLE
 
-and kill it.
+and kill it if you want to.
 
 The PID is not the only namespace you can create, as you can imagine. The
-networking for example is still the host one:
+network for example is still the host one:
 #+BEGIN_EXAMPLE
   /bin # ip link
   1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN qlen 1000
@@ -255,14 +252,13 @@ here is the result:
   ping: sendto: Network unreachable
 #+END_EXAMPLE
 
-Ops... maybe we are a bit too isolated now. Topic of the next section will be
-how to open a little hole in this isolation and get some containers to
-communicate in some way.
+Pretty isolated I would say. Topic of the next section will be how to open a
+little hole in this isolation and get some containers to communicate somehow.
 
-Before to move on though I'd like to put a little disclaimer here. Even though
-I'm done with this section, it doesn't mean that with an =unshare= command you get a
+Before to move on I'd like to put a little disclaimer here. Even though I'm done
+with this section, it doesn't mean that with an =unshare= command you get a
 fully secure container. Don't go to your boss and say that you want to toss
-Docker and use shell scripts, because it's the same thing.
+Docker and use shell scripts because it's the same thing.
 
 What our container is still missing is, for example, resource isolation. We
 could crash the machine by creating a lot of processes, or slow it down by
@@ -286,16 +282,16 @@ calling a bunch of Linux syscalls.
 * Part two: networking from scratch
 Goal of this section will be to break the isolation we put our container in, and
 make it communicate with:
-+ another container in the same host;
-+ another container in another host;
++ a container in the same host;
++ a container in another host;
 + the Internet.
 
-I'm running this experiment in a three nodes cluster. Among the nodes there is a
-private network under 10.141/16. The head node has two network interfaces, so
-it's able to communicate with both the external and the internal network. The
-other two nodes have only one network interface and they can reach the external
-network by using the head node as gateway. The following schema should clarify
-the situation:
+I'm running this experiment in a three nodes cluster. The nodes communicate
+through a private network under 10.141/16. The head node has two network
+interfaces, so it's able to communicate with both the external and the internal
+network. The other two nodes have only one network interface and they can reach
+the external network by using the head node as gateway. The following schema
+should clarify the situation:
 
 [[file:physical.svg]]
 
@@ -322,7 +318,7 @@ going to be able to communicate either.
 
 How do we solve this problem? We use a veth pair, which stands for Virtual
 Ethernet pair. As the name suggests, a veth pair is a pair of virtual
-interfaces, that act as an Ethernet cable. Whatever comes from one end, goes to
+interfaces, that act as an Ethernet cable. Whatever comes into one end, goes to
 the other. Sounds useful? Yes, because we can move one end of the pair inside
 the container, and keep the other end in the host. So we are basically piercing
 a hole in the container to slide our little virtual wire in.
@@ -352,7 +348,7 @@ like:
 #+END_EXAMPLE
 
 Cool! Everything is down, but we have a new interface. Let's also rename it to
-something less scary, like =eth0=. You'll feel more at home in the container:
+something less scary, like =eth0=. You'll feel more home in the container:
 #+BEGIN_EXAMPLE
   ip link set dev veth1 name eth0 address 8e:7f:62:52:76:71
 #+END_EXAMPLE
@@ -365,9 +361,8 @@ out. What kind of IP should we give to the container? What kind of connectivity
 do we want to provide? The way we are going to set it up is the default Docker
 way: bridge networking. Containers on the same host live on the same network,
 but different than the host one. This means that we have to setup a virtual
-network where containers are able to talk to each other at level 2 (also called
-[[https://en.wikipedia.org/wiki/Data_link_layer][data link layer]]). This also means that we won't consume any physical IP address
-from the host network.
+network where containers are able to talk to each other at [[https://en.wikipedia.org/wiki/Data_link_layer][level 2]]. This also
+means that we won't consume any physical IP address from the host network.
 
 I choose the 172.19.35/24 subnet for the containers, since it doesn't conflict
 with the cluster private network (10.141/16).[fn:8] This means that I have space
@@ -394,8 +389,8 @@ Now we want do to the very same thing with another container. So let's create it
   mount -t proc proc /proc
 #+END_EXAMPLE
 
-Then in the host let's first setup another ~$CPID2~ variable with the PID of
-this new container,[fn:10] and then create another veth pair:
+Then in the host we setup another ~$CPID2~ variable with the PID of this new
+container,[fn:10] and then create another veth pair:
 #+BEGIN_EXAMPLE
   ip link add veth2 type veth peer name veth3
   ip link set veth3 netns $CPID2
@@ -418,21 +413,20 @@ situation right now:
 [[file:detail-second-container.svg]]
 
 What we need to do here is try to link those two veth pairs together, in a way
-that they can communicate at layer 2. Something like... a [[ ip link set dev lo up MAC=$(ip addr show dev veth3 | grep 'link/ether' | tr -s ' ' | cut -d' ' -f3) ip link set dev veth3 name eth0 address $MAC ip addr add dev eth0 172.19.35.3/24 ip link set eth0 up ][bridge]]! It will take
-care of linking together two network segments. It works at level 2 like a switch
-(so it basically "talks Ethernet"), by "enslaving" existing interfaces. You add
-a bunch of interfaces into a bridge, and they will be communicating with each
-other thanks to the bridge.
+that they can communicate at layer 2. Something like... a [[https://wiki.archlinux.org/index.php/Network_bridge][bridge]]! It will take
+care of linking together the two network segments. It works at level 2 like a
+switch (so it basically "talks Ethernet"), by "enslaving" existing interfaces.
+You add a bunch of interfaces into a bridge, and they will be communicating with
+each other thanks to the bridge.
 
-Let's create the bridge and put the two veth interfaces still on the host
-networking:
+Let's create the bridge and put the two veth interfaces in it:
 #+BEGIN_EXAMPLE
   ip link add br0 type bridge
   ip link set veth0 master br0
   ip link set veth2 master br0
 #+END_EXAMPLE
 
-Now let's give the bridge an address and bring it up:
+Now let's give the bridge an IP and bring it up:
 #+BEGIN_EXAMPLE
   ip addr add dev br0 172.19.35.1/24
   ip link set br0 up
@@ -493,9 +487,10 @@ Then you need to set the default route in the container:
   ip route add default via 172.19.36.1
 #+END_EXAMPLE
 
-In this way any packet with an unknown destination will be sent through the
-gateway, which is the bridge. From there it will be natted by eth0, our physical
-interface, and then sent to the Internet by using the physical IP as source.
+In this way any packet with a destination on a different network will be sent
+through the gateway, which is the bridge. From there it will be natted by eth0,
+our physical interface, and then sent through the cluster fabric by using the
+physical IP as source.
 
 This is now the situation:
 
@@ -510,9 +505,9 @@ If I ping Google's DNS from the container, I see this from the host:
   23:27:51.242251 IP 8.8.8.8 > 172.19.35.2: ICMP echo reply, id 13824, seq 0, length 64
 #+END_EXAMPLE
 
-As you can see the packet comes from the container, it's translated into the
-host IP (10.141.0.1) and then when it comes back, the destination is replaced
-with the container IP (172.19.35.2).
+As you can see the packet comes from the container, is translated into the host
+IP (10.141.0.1) and then when it comes back, the destination is replaced with
+the container IP (172.19.35.2).
 
 This is what I see from the head node, instead:
 #+BEGIN_EXAMPLE
