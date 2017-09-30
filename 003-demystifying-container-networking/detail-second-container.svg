@@ -15,7 +15,7 @@
    version="1.1"
    id="svg5296"
    inkscape:version="0.92.2 5c3e80d, 2017-08-06"
-   sodipodi:docname="detail-veth.svg">
+   sodipodi:docname="detail-second-container.svg">
   <defs
      id="defs5290" />
   <sodipodi:namedview
@@ -149,6 +149,24 @@
          x="64.142227"
          sodipodi:role="line">veth pair</tspan></text>
     <rect
+       style="fill:#ff9f1c;fill-opacity:1;stroke:#27a89f;stroke-width:1.32291663;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1"
+       id="rect5967"
+       width="30.735994"
+       height="16.036171"
+       x="149.76236"
+       y="70.911125" />
+    <text
+       id="text5971"
+       y="82.085609"
+       x="153.27579"
+       style="font-style:normal;font-weight:normal;font-size:8.46666622px;line-height:125%;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#ff1654;fill-opacity:1;stroke:none;stroke-width:2.64599991;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
+       xml:space="preserve"><tspan
+         id="tspan5969"
+         style="font-style:normal;font-size:8.46666622px;fill:#ff1654;fill-opacity:1;stroke-width:2.64599991;stroke-miterlimit:4;stroke-dasharray:none"
+         y="82.085609"
+         x="153.27579"
+         sodipodi:role="line">veth2</tspan></text>
+    <rect
        y="133.7325"
        x="130.08678"
        height="21.519121"
@@ -211,5 +229,69 @@
          y="153.73596"
          style="font-style:normal;font-size:11.28888893px;fill:#2ec4b6;fill-opacity:1;stroke-width:0.26458332px"
          id="tspan5180-7">Host 1</tspan></text>
+    <rect
+       style="fill:#011627;fill-opacity:1;stroke:#2ec4b6;stroke-width:1.32291663;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
+       id="rect4646"
+       width="72.775909"
+       height="40.678707"
+       x="199.50842"
+       y="35.933308" />
+    <text
+       id="text4650"
+       y="50.244064"
+       x="207.98009"
+       style="font-style:normal;font-weight:normal;font-size:4.23333311px;line-height:125%;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#2ec4b6;fill-opacity:1;stroke:none;stroke-width:0.26458332px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1"
+       xml:space="preserve"><tspan
+         id="tspan4648"
+         style="font-style:normal;font-size:11.28888893px;fill:#2ec4b6;fill-opacity:1;stroke-width:0.26458332px"
+         y="50.244064"
+         x="207.98009"
+         sodipodi:role="line">Container</tspan></text>
+    <text
+       id="text4654"
+       y="65.60479"
+       x="203.24307"
+       style="font-style:normal;font-weight:normal;font-size:4.23333311px;line-height:125%;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#ff1654;fill-opacity:1;stroke:none;stroke-width:0.26458332px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1"
+       xml:space="preserve"><tspan
+         id="tspan4652"
+         style="font-style:normal;font-size:8.46666622px;fill:#ff1654;fill-opacity:1;stroke-width:0.26458332px"
+         y="65.60479"
+         x="203.24307"
+         sodipodi:role="line">172.19.35.3/24</tspan></text>
+    <rect
+       y="70.911125"
+       x="221.55565"
+       height="16.036171"
+       width="30.735994"
+       id="rect4656"
+       style="fill:#ff9f1c;fill-opacity:1;stroke:#27a89f;stroke-width:1.32291663;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1" />
+    <text
+       xml:space="preserve"
+       style="font-style:normal;font-weight:normal;font-size:8.46666622px;line-height:125%;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#ff1654;fill-opacity:1;stroke:none;stroke-width:2.64599991;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
+       x="224.98433"
+       y="82.085609"
+       id="text4660"><tspan
+         sodipodi:role="line"
+         x="224.98433"
+         y="82.085609"
+         style="font-style:normal;font-size:8.46666622px;fill:#ff1654;fill-opacity:1;stroke-width:2.64599991;stroke-miterlimit:4;stroke-dasharray:none"
+         id="tspan4658">veth3</tspan></text>
+    <path
+       sodipodi:nodetypes="cccccc"
+       inkscape:connector-curvature="0"
+       id="path4662"
+       d="m 168.54329,84.059988 v 8.77893 c 0,0 0,6.89806 6.8981,6.89806 21.46092,0 37.06316,0 58.52397,0 6.89806,0 6.89806,-6.89806 6.89806,-6.89806 v -8.77893"
+       style="fill:none;fill-rule:evenodd;stroke:#ff9f1c;stroke-width:2.64583325;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1" />
+    <text
+       xml:space="preserve"
+       style="font-style:normal;font-weight:normal;font-size:4.23333311px;line-height:125%;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#2ec4b6;fill-opacity:1;stroke:none;stroke-width:0.26458332px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1"
+       x="178.44231"
+       y="111.21912"
+       id="text4666"><tspan
+         sodipodi:role="line"
+         x="178.44231"
+         y="111.21912"
+         style="font-style:normal;font-size:11.28888893px;fill:#2ec4b6;fill-opacity:1;stroke-width:0.26458332px"
+         id="tspan4664">veth pair</tspan></text>
   </g>
 </svg>

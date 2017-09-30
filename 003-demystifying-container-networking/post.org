@@ -297,7 +297,7 @@ other two nodes have only one network interface and they can reach the external
 network by using the head node as gateway. The following schema should clarify
 the situation:
 
-*TODO physical network schema*
+[[file:physical.svg]]
 
 ** Communicate within the host
 Right now our container is completely isolated. Let's try to at least ping the
@@ -382,7 +382,10 @@ interface:
 #+END_EXAMPLE
 
 And this is the current situation:
-[[file:detail-veth.svg]] Now we want do to the very same thing with another container. So let's create it from the same root filesystem:
+
+[[file:detail-veth.svg]]
+
+Now we want do to the very same thing with another container. So let's create it from the same root filesystem:
 #+BEGIN_EXAMPLE
   unshare -pmn -f chroot rootfs /usr/bin/env -i \
       HOME=/root \
@@ -412,7 +415,7 @@ before:
 Note that I'm using another IP address in the 172.19.35/24 subnet. This is the
 situation right now:
 
-*TODO: schema here*
+[[file:detail-second-container.svg]]
 
 What we need to do here is try to link those two veth pairs together, in a way
 that they can communicate at layer 2. Something like... a [[ ip link set dev lo up MAC=$(ip addr show dev veth3 | grep 'link/ether' | tr -s ' ' | cut -d' ' -f3) ip link set dev veth3 name eth0 address $MAC ip addr add dev eth0 172.19.35.3/24 ip link set eth0 up ][bridge]]! It will take
@@ -437,7 +440,7 @@ Now let's give the bridge an address and bring it up:
 
 Now we have this topology in place:
 
-*TODO: schema here*
+[[file:detail-bridge.svg]]
 
 As you can see, now the containers can ping each other:
 #+BEGIN_EXAMPLE
@@ -496,7 +499,7 @@ interface, and then sent to the Internet by using the physical IP as source.
 
 This is now the situation:
 
-*TODO: insert here schema*
+[[file:detail-final.svg]]
 
 If I ping Google's DNS from the container, I see this from the host:
 #+BEGIN_EXAMPLE
@@ -533,7 +536,7 @@ This is basically the plan:
 [[file:general.svg]]
 
 The two nodes communicate through the physical private network 10.141/16. We
-want to assign a subnet to each node, so any of them will be able to host some
+want to assign a subnet to each node, so each will be able to host some
 containers. We have already assigned the 172.19.35/24 network to the first host.
 We can then assign another to the second. Something like 172.19.36/24. I could
 have chosen any other IP range that didn't conflict with the existing networks,
@@ -542,7 +545,9 @@ but this one is especially handy, because both of them are part of a bigger
 host gets a slice (a /24 subnet). This means that we can assign ~24 - 16 = 8~
 bits to different hosts, so maximum 255 nodes. Of course you can use different
 network sizes to accomodate your needs, but that's the way we are going to set
-it up here.
+it up here. NAT is already present in the first host, so we are going to do the
+same for the second one, and then add routing rules (layer 3) between the two
+hosts.
 
 Let's go real quick over the second host, create a container, setup the
 networking there as we did for the first host:
@@ -663,15 +668,15 @@ Interestingly enough, the way Calico distributes the routing rules is through
 
 The end result we're going to aim at is this:
 
-[[file:general.svg]]
+[[file:general-calico.svg]]
 
-Looks familiar? Yes, it's the same as the one I used in the previous section. We
-still use the same IP ranges: the host networking under 10.141/16, and we're
-going to setup a 172.19/16 network for the containers. As before, every host
-gets a /24 subnet. The difference is in the way the packets are routed. With
-Calico on the wire you'll see packets coming from a 172.19/16 address and going
-to a 172.19/16 address because, as I said before, no natting or overlays are
-used.
+Looks familiar? Yes, it's almost the same as the one I used in the previous
+section. We still use the same IP ranges: the host networking under 10.141/16,
+and we're going to setup a 172.19/16 network for the containers. As before,
+every host gets a /24 subnet. The difference is in the way the packets are
+routed. With Calico everything goes at layer 3, so on the wire you'll see
+packets coming from a 172.19/16 address and going to a 172.19/16 address
+because, as I said before, no natting or overlays are used.
 
 ** Setup the host network
 Without further ado, let's create our container on the first host:
@@ -787,6 +792,10 @@ can see from the host:
   5: veth0@if4: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc pfifo_fast state UP mode DEFAULT qlen 1000
       link/ether f6:5c:53:b4:f8:03 brd ff:ff:ff:ff:ff:ff link-netnsid 0
 #+END_EXAMPLE
+
+And this is the current situation:
+
+[[file:detail-calico-final.svg]]
 
 Another detail is the blackhole route, to drop packets coming for unexisting containers:
 #+BEGIN_EXAMPLE
@@ -963,10 +972,22 @@ not really necessary.
 
 * Concluding remarks
 With this long post I tried to reproduce two different solutions for container
-networking, with nothing more than Linux commands. I hope this helps to
-understand a bit and remove some of the magic that seems to happen when
-containers talk to each other. It helped me for sure, and now I'm much more
-confident in my debugging when something goes wrong at the networking level.
+networking, with nothing more than Linux commands. Docker, Calico, Flannel and
+the others are all nice tools, but they aren't magical. They build on top of
+standard Linux functionality, and trying to reproduce their behavior helped me
+(and I hope you too) to understand them better.
+
+Keep in mind that this is not a complete guide. There are many more interesting
+topics, like network policies and security in general, then a universe of
+different solutions around networking, like overlay networks, ipvlan, vlan,
+macvlan, macvtap, ipsec, and I don't know how many others. For containers in
+general there are many other things you want to isolate, like the physical
+resources and capabilities, as I mentioned during the first part of this post.
+The overwhelming amount of technical terms shouldn't discourage you to explore
+and expand your knowledge. You might find, like me, that it's not as hard as it
+seems.
+
+That's all folks. Happy debugging!
 
 * Footnotes
 
