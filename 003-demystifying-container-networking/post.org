@@ -35,7 +35,7 @@ concepts:
 
 I will link the advanced topics as the post unfolds.
 
-* Part one: containers from scratch
+* Containers from scratch
 Rise your hand if you ever tried the magic of [[https://www.docker.com/][Docker]] at least once. You pull an
 image from the Internet, you run it and you are projected inside another OS,
 with different libraries and applications installed, and all of that in no time.
@@ -279,7 +279,7 @@ highly configured Linux process. No virtualization and no crazy stuff is going
 on here. You could create a container today with just a plain Linux machine, by
 calling a bunch of Linux syscalls.
 
-* Part two: networking from scratch
+* Networking from scratch
 Goal of this section will be to break the isolation we put our container in, and
 make it communicate with:
 + a container in the same host;
@@ -523,9 +523,10 @@ node public IP (192.168.200.172), and then comes back the other way around. NAT
 is also working here.
 
 ** Reach a remote container
-Now, from a container we are able to communicate with another local container
-and also with the Internet. The next step is to reach a container in another
-node, in the same physical private network (which I remind you is 10.141/16).
+Now from a container we are able to communicate with both another local
+container and with the externa network. The next step is to reach a container in
+another node, in the same physical private network (the 10.141/16 network the
+nodes sit in).
 
 This is basically the plan:
 [[file:general.svg]]
@@ -533,16 +534,16 @@ This is basically the plan:
 The two nodes communicate through the physical private network 10.141/16. We
 want to assign a subnet to each node, so each will be able to host some
 containers. We have already assigned the 172.19.35/24 network to the first host.
-We can then assign another to the second. Something like 172.19.36/24. I could
-have chosen any other IP range that didn't conflict with the existing networks,
-but this one is especially handy, because both of them are part of a bigger
+We can then assign another to the second, for example 172.19.36/24. I could have
+chosen any other IP range that doesn't conflict with the existing networks, but
+this one is especially handy, because both of them are part of a bigger
 172.19/16 network. We can think of it as the containers' network, in which every
 host gets a slice (a /24 subnet). This means that we can assign ~24 - 16 = 8~
 bits to different hosts, so maximum 255 nodes. Of course you can use different
 network sizes to accomodate your needs, but that's the way we are going to set
-it up here. NAT is already present in the first host, so we are going to do the
-same for the second one, and then add routing rules (layer 3) between the two
-hosts.
+it up here. NAT has been already setup in the first host, so we are going to do
+the same for the second one, and then add routing rules (layer 3) between the
+two hosts.
 
 Let's go real quick over the second host, create a container, setup the
 networking there as we did for the first host:
@@ -592,14 +593,14 @@ table of the first host:
   172.19.35.0/24 dev br0  proto kernel  scope link  src 172.19.35.1
 #+END_EXAMPLE
 
-There is the default gateway to the head node, and two "scope link" ranges, for
-networks reachable at level 2 (unsurprisingly there are the 10.141/16 physical
-network, and the 172.19.35/24 network for the local containers). As you can see
-there's no rule for 172.19.26/24. This means the packet will go through the
-default gateway, and there it will try to go outside, because the head node
-doesn't know anything about this IP either.
+There is a default gateway pointing to the head node, and two "scope link"
+ranges, for networks reachable at level 2 (unsurprisingly there are the
+10.141/16 physical network, and the 172.19.35/24 network for the local
+containers). As you can see there's no rule for 172.19.36/24. This means the
+packet will go through the default gateway, and from there it will try to go
+outside, because the head node doesn't know anything about this IP either.
 
-So, what we should do is to add a routing rule to your table, telling that any
+What we should do is add a routing rule to the node table, telling that any
 packet for 172.19.36/24 should be forwarded to the second host, listening at
 10.141.0.2:
 #+BEGIN_EXAMPLE
@@ -617,7 +618,7 @@ default page from the other.
 
 Hooray!
 
-* Bonus 1: Calico
+* Bonus: Calico
 What I showed in the last section is basically how Docker sets up its bridge
 networking. The routing rules to make the containers see each other come from
 me. What Docker Swarm and other networking solutions for Docker use instead is
@@ -629,7 +630,7 @@ in this section.
 
 Some of you may already know [[https://kubernetes.io/][Kubernetes]]. It's the most popular (any my favorite)
 container orchestrator. What it basically does is providing declarative APIs to
-manage containers. [[https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/#restart-policy][Restarts]] upon failures, [[https://kubernetes.io/docs/concepts/workloads/controllers/replicaset/][replica's scaling]], [[https://kubernetes.io/docs/concepts/workloads/controllers/deployment/][upgrading]],
+manage containers. [[https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/#restart-policy][Restarts]] upon failures, [[https://kubernetes.io/docs/concepts/workloads/controllers/replicaset/][replicas' scaling]], [[https://kubernetes.io/docs/concepts/workloads/controllers/deployment/][upgrading]],
 [[https://kubernetes.io/docs/concepts/services-networking/ingress/][ingress]], and [[https://kubernetes.io/docs/concepts/services-networking/network-policies/][many]] [[https://kubernetes.io/docs/concepts/api-extension/custom-resources/][other]] [[https://kubernetes.io/docs/concepts/workloads/controllers/statefulset/][things]] can be managed automatically by Kubernetes. For
 all this magic to happen, Kubernetes imposes some restrictions on the underlying
 infrastructure. Here is the section about the [[https://kubernetes.io/docs/concepts/cluster-administration/networking/#kubernetes-model][networking model]]:
@@ -649,14 +650,14 @@ As the documentation says:
 #+END_QUOTE
 
 The solution we used in the previous section does not satisfy these
-requirements. In our case the source IP is rewritten by the NAT, so the
-destination container sees only the host IP.
+requirements. In our case the source IP is rewritten by NAT, so the destination
+container sees only the host IP.
 
-There are a number of projects that implement the Kubernetes mode, and I really
-like [[https://www.projectcalico.org//][Project Calico]], so I'm going to reproduce its setup here, again the hard
-way, just Linux commands.
+There are a number of projects that satisfy the Kubernetes requirements, and
+among them I really like [[https://www.projectcalico.org//][Project Calico]], so I'm going to reproduce its setup
+here, again the hard way, just Linux commands.
 
-The Calico solution is to use layer 3 networking all the way up to the
+The Calico's solution is to use layer 3 networking all the way up to the
 containers. No Docker bridges, no NAT, just pure routing rules and iptables.
 Interestingly enough, the way Calico distributes the routing rules is through
 [[https://en.wikipedia.org/wiki/Border_Gateway_Protocol][BGP]],[fn:13] which is the same way the Internet works.
@@ -666,10 +667,10 @@ The end result we're going to aim at is this:
 [[file:general-calico.svg]]
 
 Looks familiar? Yes, it's almost the same as the one I used in the previous
-section. We still use the same IP ranges: the host networking under 10.141/16,
-and we're going to setup a 172.19/16 network for the containers. As before,
-every host gets a /24 subnet. The difference is in the way the packets are
-routed. With Calico everything goes at layer 3, so on the wire you'll see
+section. We're going to use the same IP ranges: the host networking under
+10.141/16, and we're going to setup a 172.19/16 network for the containers. As
+before, every host gets a /24 subnet. The difference is in the way the packets
+are routed. With Calico everything goes at layer 3, so on the wire you'll see
 packets coming from a 172.19/16 address and going to a 172.19/16 address
 because, as I said before, no natting or overlays are used.
 
@@ -682,7 +683,7 @@ Without further ado, let's create our container on the first host:
       /bin/ash -l
 #+END_EXAMPLE
 
-Then, let's create our veth pair, and assign one end to the container:
+Then, let's create our veth pair, and move one end into the container:
 #+BEGIN_EXAMPLE
   CPID=$(ps -C ash -o pid= | tr -d ' ')
   ip link add veth0 type veth peer name veth1
@@ -699,11 +700,11 @@ Let's now give the container an IP address:
   ip link set eth0 up
 #+END_EXAMPLE
 
-Have you noted anything strange? I'm using a /32 for the container. This means
-that whenever I send a packet, even for a container living on the same host, it
-will need to go through level 3. This allows to get rid of the bridge, and also
-makes sure that the container doesn't try (and fail) to reach another at
-level 2, by sending useless ARP requests.
+Have you noted anything strange? I'm using a /32 address for the container IP.
+This means that whenever I send a packet, even for a container living on the
+same host, it will need to go through level 3. This allows to get rid of the
+bridge, and also makes sure that the container doesn't try (and fail) to reach
+another at level 2, by sending useless ARP requests.
 
 Now on the host we need to enable [[https://en.wikipedia.org/wiki/Proxy_ARP][ARP proxy]] for the veth interface.
 #+BEGIN_EXAMPLE
@@ -715,9 +716,9 @@ Now on the host we need to enable [[https://en.wikipedia.org/wiki/Proxy_ARP][ARP
 #+END_EXAMPLE
 
 What this does is basically replying to ARP requests with its own MAC address.
-In this way, when the host looks for our container, veth0 will say: "it's me!",
-even though it's not, and when the packet comes to it, it will get copied to the
-other end of the pair... where our container is listening.[fn:14]
+In this way, when the container looks for the link local address, veth0 will
+say: "it's me!", replying with it's own MAC address, and the packet will be sent
+there at layer 2.[fn:14]
 
 We also need to enable IP forwarding on the host's physical interface, to allow
 routing:
@@ -745,8 +746,8 @@ Last bit missing on the host is the rule to reach the container from the host:
   ip r add 172.19.35.2 dev veth0 scope link
 #+END_EXAMPLE
 
-With this we're saying that to reach the container the packet has to go through
-the veth0 interface.
+With this we're saying that, to reach the container, the packet has to go
+through the veth0 interface.
 
 Now, from the container we're able to ping the host:
 #+BEGIN_EXAMPLE
@@ -761,9 +762,9 @@ Now, from the container we're able to ping the host:
 
 And this is the traffic passing:
 #+BEGIN_EXAMPLE
-  [root@node001 ~]# tcpdump -i any host 172.19.35.2
-  16:25:10.439980 IP 172.19.35.2 > node001.cm.cluster: ICMP echo request, id 6144, seq 0, length 64
-  16:25:10.440014 IP node001.cm.cluster > 172.19.35.2: ICMP echo reply, id 6144, seq 0, length 64
+  [root@node001 ~]# tcpdump -i any host 172.19.35.2 -n
+  16:25:10.439980 IP 172.19.35.2 > 10.141.0.1: ICMP echo request, id 6144, seq 0, length 64
+  16:25:10.440014 IP 10.141.0.1 > 172.19.35.2: ICMP echo reply, id 6144, seq 0, length 64
 #+END_EXAMPLE
 
 ARP goes back and forth to determine the physical address of the local link IP:
@@ -797,9 +798,9 @@ Another detail is the blackhole route, to drop packets coming for unexisting con
   ip r add blackhole 172.19.35.0/24
 #+END_EXAMPLE
 
-In this way any packet that is not sent to a specific container is be dropped.
-Packets for containers still work, because their routing rules are more
-specific, so they take precedence:
+In this way any packet sent to the host subnet to an IP not present in the host
+ will be dropped. Packets for exising containers still work, because their
+ routing rules are more specific, so they take precedence:
 #+BEGIN_EXAMPLE
   [root@node001 ~]# ip r
   default via 10.141.255.254 dev eth0
@@ -809,10 +810,14 @@ specific, so they take precedence:
   172.19.35.2 dev veth0  scope link
 #+END_EXAMPLE
 
+In this case, if you send a packet to 172.19.35.2, it will go to veth0. If you
+instead try to reach 172.19.35.3, it will go to the blackhole and dropped,
+instead of going to the default gateway.
+
 ** Reach a remote container
-To reach a container living in another host, you have to replicate the setup
-done for this host. You have to assign to that node another /24 slice from the
-container network, and use one IP from that slice to create a container (I used
+To reach a container running on another host, you have to replicate the setup
+done for this host. You have to assign to that node another /24 subnet from the
+container network, and use one IP from that subnet to create a container (I used
 the 172.19.36/24 subnet, the same as Part 2).[fn:15]
 
 Then you need to add the routing rules to direct the traffic to the right host.
@@ -828,7 +833,7 @@ and similarly from the second host:
 
 Done. Now the containers can reach each other. If you look at the traffic,
 you'll see that the source and destination IPs are preserved, and not NATted,
-satisfying Kubernetes' requirements:
+satisfying the Kubernetes' requirements:
 #+BEGIN_EXAMPLE
   [root@node001 ~]# tcpdump -i any host 172.19.35.2
   20:08:02.154031 IP 172.19.35.2 > 172.19.36.2: ICMP echo request, id 17152, seq 0, length 64
@@ -837,15 +842,14 @@ satisfying Kubernetes' requirements:
   20:08:02.155098 IP 172.19.36.2 > 172.19.35.2: ICMP echo reply, id 17152, seq 0, length 64
 #+END_EXAMPLE
 
-Clean IPs are being used here. Success!
+Success!
 
 ** Reach the Internet
 If you are lucky you are able to reach the external network already. This all
 depends on how NAT is setup in your cluster. A proper setup should allow only
 packets coming from the physical network to escape.
 
-From my head node (that is also the default gateway of my physical machine), I
-see:
+From my head node (that is also the default gateway of the other nodes), I see:
 #+BEGIN_EXAMPLE
   [root@mbrt-c-08-13-t-c7u2 ~]# iptables -L -t nat
   Chain PREROUTING (policy ACCEPT)
@@ -862,19 +866,20 @@ see:
   MASQUERADE  all  --  10.141.0.0/16        anywhere
 #+END_EXAMPLE
 
-This is precisely my case. To allow then to NAT also packets coming from the
-containers network, I have to add another rule:
+This is precisely my case. Only packets coming from the 10.141/16 network, will
+be natted. To perform NAT also for packets coming from the containers network, I
+have to add another rule:
 #+BEGIN_EXAMPLE
   iptables -t nat -A POSTROUTING -o eth1 -j MASQUERADE -s 172.19.0.0/16
 #+END_EXAMPLE
 
-so now, also this rule is present:
+Looking this way in the table:
 #+BEGIN_EXAMPLE
   MASQUERADE  all  --  172.19.0.0/16        anywhere
 #+END_EXAMPLE
 
-and we need a routing rule to be able to reach the physical machine hosting the
-containers:
+Then we need a routing rule in the head node, telling it where it can find the
+172.19.35/24 subnet:
 #+BEGIN_EXAMPLE
   ip route add 172.19.35.0/24 via 10.141.0.1 src 10.141.255.254
 #+END_EXAMPLE
@@ -885,7 +890,7 @@ And now, you can finally ping the outside network from the container!
 Among the feature that I haven't discussed, Calico has a really nice distributed
 firewall, applied through iptables, but I left it out of scope from this post.
 
-* Bonus 2: Debug container networking
+* Bonus: Debug container networking
 In this section I would like to digress a bit and talk about debugging. I hope
 it's clear at this point that containers aren't magical, and networking isn't
 magical either. This means that for debugging you can use all the regular tools
@@ -898,7 +903,7 @@ happens if your Docker image does not contain these tools?
   /bin/ash: ip: not found
 #+END_EXAMPLE
 
-This happens many times, and even worse if your docker image looks like this:
+This happens many times, and even worse if your Docker image looks like this:
 #+BEGIN_EXAMPLE
   FROM scratch
   ADD main /
@@ -908,7 +913,7 @@ This happens many times, and even worse if your docker image looks like this:
 You don't even have a console there. What do you do?
 
 ** Enter the =nsenter= magical world
-There is a very simple trick you should probably keep in mind: =nsenter=. This
+There is a very simple trick you should probably remember: =nsenter=. This
 command enters one or more namespaces from the host. You can enter all of them
 and in that case you would have another console open on the container (similar
 to the [[https://docs.docker.com/engine/reference/commandline/exec/][docker exec]] command):
@@ -919,7 +924,7 @@ to the [[https://docs.docker.com/engine/reference/commandline/exec/][docker exec
           /bin/bash
 #+END_EXAMPLE
 
-and look, we see the same processes:
+and look, we see the same processes as the container do:
 #+BEGIN_EXAMPLE
   [root@node001 rootfs]# mount -t proc proc /proc
   [root@node001 rootfs]# ps aux
@@ -929,7 +934,8 @@ and look, we see the same processes:
   root       127  0.0  0.1 139492  1620 pts/1    R+   20:28   0:00 ps aux
 #+END_EXAMPLE
 
-What's most important for our purposes is accessing the network namespace:
+What's most important for our purposes is accessing the network namespace
+though:
 #+BEGIN_EXAMPLE
   nsenter --net=/proc/$CPID/ns/net /bin/bash
 #+END_EXAMPLE
@@ -947,7 +953,8 @@ In particular you have access to the host filesystem:
   ...
 #+END_EXAMPLE
 
-and all the tools installed. But the network you see is the container one:
+and all your favorite tools available. But the network you see is the container
+one:
 #+BEGIN_EXAMPLE
   [root@node001 ~]# ip r
   default via 169.254.1.1 dev eth0
@@ -959,7 +966,7 @@ you can =nsenter= it:
 #+BEGIN_EXAMPLE
   [root@node001 ~]# docker inspect --format '{{.State.Pid}}' my-awesome-container
   24028
-  [root@node001 ~]#n senter --net=/proc/24028/ns/net /bin/bash
+  [root@node001 ~]# nsenter --net=/proc/24028/ns/net /bin/bash
 #+END_EXAMPLE
 
 So, please, don't install debugging tools in your Docker images anymore. It's
@@ -974,18 +981,16 @@ standard Linux functionality, and trying to reproduce their behavior helped me
 
 Keep in mind that this is not a complete guide. There are many more interesting
 topics, like network policies and security in general, then a universe of
-different solutions around networking, like overlay networks, ipvlan, vlan,
-macvlan, macvtap, ipsec, and I don't know how many others. For containers in
-general there are many other things you want to isolate, like the physical
-resources and capabilities, as I mentioned during the first part of this post.
-The overwhelming amount of technical terms shouldn't discourage you to explore
-and expand your knowledge. You might find, like me, that it's not as hard as it
-seems.
+different solutions, like [[https://en.wikipedia.org/wiki/Overlay_network][overlay networks]], [[http://hicu.be/macvlan-vs-ipvlan][Ipvlan]], [[http://hicu.be/docker-networking-macvlan-vlan-configuration][macvlan]], [[http://virt.kernelnewbies.org/MacVTap][MacVTap]], [[https://en.wikipedia.org/wiki/IPsec][IPsec]], and
+I don't know how many others. For containers in general there are many other
+things you want to isolate, like physical resources and capabilities, as I
+mentioned during the first part of this post. The overwhelming amount of
+technical terms shouldn't discourage you to explore and expand your knowledge.
+You might find, like me, that it's not as hard as it seems.
 
 That's all folks. Happy debugging!
 
 * Footnotes
-
 [fn:1] I run my laptop with [[https://www.archlinux.org/][Arch Linux]] and I used [[https://www.centos.org/][CentOS 7]] for my demo cluster.
 
 [fn:2] Too bad CentOS 6 users!
