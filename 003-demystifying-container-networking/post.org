@@ -484,7 +484,7 @@ Then insert a NAT rule (also called IP masquerade) in the external interface:
 
 Then you need to set the default route in the container:
 #+BEGIN_EXAMPLE
-  ip route add default via 172.19.36.1
+  ip route add default via 172.19.35.1
 #+END_EXAMPLE
 
 In this way any packet with a destination on a different network will be sent
